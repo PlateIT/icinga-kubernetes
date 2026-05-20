@@ -5,17 +5,21 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
+	"time"
+
 	"github.com/go-logr/logr"
 	"github.com/go-sql-driver/mysql"
 	"github.com/icinga/icinga-go-library/backoff"
 	"github.com/icinga/icinga-go-library/retry"
 	"github.com/jmoiron/sqlx"
 	"github.com/pkg/errors"
-	"time"
 )
 
-const MySQL = "icinga-mysql"
-const PostgreSQL = "icinga-pgsql"
+const MySQL = "mysql"
+const PostgreSQL = "postgres"
+
+const icingaMySQL = "icinga-mysql"
+const icingaPostgreSQL = "icinga-pgsql"
 
 var timeout = time.Minute * 5
 
@@ -81,10 +85,40 @@ func (d Driver) OpenConnector(name string) (driver.Connector, error) {
 
 // RegisterDrivers makes our database Driver(s) available under the name "icinga-*sql".
 func RegisterDrivers(logger logr.Logger) {
-	sql.Register(MySQL, &Driver{ctxDriver: &mysql.MySQLDriver{}, Logger: logger})
-	sql.Register(PostgreSQL, &Driver{ctxDriver: &PgSQLDriver{}, Logger: logger})
+	sql.Register(icingaMySQL, &Driver{ctxDriver: &mysql.MySQLDriver{}, Logger: logger})
+	sql.Register(icingaPostgreSQL, &Driver{ctxDriver: &PgSQLDriver{}, Logger: logger})
 	_ = mysql.SetLogger(mysqlLogger(func(v ...interface{}) { fmt.Println(v...) }))
 	sqlx.BindDriver(PostgreSQL, sqlx.DOLLAR)
+	sqlx.BindDriver(icingaPostgreSQL, sqlx.DOLLAR)
+}
+
+func DriverNameForType(dbType string) (string, bool) {
+	switch dbType {
+	case "", "mysql":
+		return MySQL, true
+	case "pgsql", "postgres", "postgresql":
+		return PostgreSQL, true
+	default:
+		return "", false
+	}
+}
+
+func IsMySQLDriver(driverName string) bool {
+	switch driverName {
+	case MySQL, icingaMySQL:
+		return true
+	default:
+		return false
+	}
+}
+
+func IsPostgreSQLDriver(driverName string) bool {
+	switch driverName {
+	case PostgreSQL, icingaPostgreSQL, "pgsql", "postgresql":
+		return true
+	default:
+		return false
+	}
 }
 
 // ctxDriver helps ensure that we only support drivers that implement driver.Driver and driver.DriverContext.

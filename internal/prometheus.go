@@ -42,10 +42,10 @@ func SyncPrometheusConfig(ctx context.Context, db *database.DB, config *metrics.
 		err := db.ExecTx(ctx, func(ctx context.Context, tx *sqlx.Tx) error {
 			if _, err := tx.ExecContext(
 				ctx,
-				fmt.Sprintf(
+				tx.Rebind(fmt.Sprintf(
 					`DELETE FROM "%s" WHERE "cluster_uuid" = ? AND "key" LIKE ? AND "locked" = ?`,
 					database.TableName(&schemav1.Config{}),
-				),
+				)),
 				clusterUuid,
 				`prometheus.%`,
 				_true,
@@ -67,10 +67,10 @@ func SyncPrometheusConfig(ctx context.Context, db *database.DB, config *metrics.
 		err := db.ExecTx(ctx, func(ctx context.Context, tx *sqlx.Tx) error {
 			if _, err := tx.ExecContext(
 				ctx,
-				fmt.Sprintf(
+				tx.Rebind(fmt.Sprintf(
 					`DELETE FROM "%s" WHERE "cluster_uuid" = ? AND "key" LIKE ? AND "locked" = ?`,
 					database.TableName(&schemav1.Config{}),
-				),
+				)),
 				clusterUuid,
 				`prometheus.%`,
 				_true,

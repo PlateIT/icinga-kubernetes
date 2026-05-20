@@ -3,12 +3,18 @@ package metrics
 import (
 	"context"
 	"fmt"
+	"net"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/icinga/icinga-go-library/backoff"
 	"github.com/icinga/icinga-go-library/database"
 	"github.com/icinga/icinga-go-library/logging"
 	"github.com/icinga/icinga-go-library/periodic"
 	"github.com/icinga/icinga-go-library/retry"
 	"github.com/icinga/icinga-go-library/types"
+	kdatabase "github.com/icinga/icinga-kubernetes/pkg/database"
 	schemav1 "github.com/icinga/icinga-kubernetes/pkg/schema/v1"
 	"github.com/pkg/errors"
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
@@ -17,10 +23,6 @@ import (
 	"golang.org/x/sync/errgroup"
 	kcorev1 "k8s.io/api/core/v1"
 	kcache "k8s.io/client-go/tools/cache"
-	"net"
-	"strings"
-	"sync"
-	"time"
 )
 
 // PromQuery defines a prometheus query with the metric group, the query and the name label
@@ -289,46 +291,58 @@ func NewPromMetricSync(promApiClient v1.API, db *database.DB, logger *logging.Lo
 
 // promMetricClusterUpsertStmt returns database upsert statement to upsert cluster metrics
 func (pms *PromMetricSync) promMetricClusterUpsertStmt() string {
-	return fmt.Sprintf(
-		`INSERT INTO %s (%s) VALUES (%s) ON DUPLICATE KEY UPDATE %s`,
+	return pms.promMetricUpsertStmt(
 		`prometheus_cluster_metric`,
-		"cluster_id, timestamp, category, name, value",
-		`:cluster_id, :timestamp, :category, :name, :value`,
-		`value=VALUES(value)`,
+		"cluster_uuid, timestamp, category, name, value",
+		":cluster_uuid, :timestamp, :category, :name, :value",
 	)
 }
 
 // promMetricNodeUpsertStmt returns database upsert statement to upsert node metrics
 func (pms *PromMetricSync) promMetricNodeUpsertStmt() string {
-	return fmt.Sprintf(
-		`INSERT INTO %s (%s) VALUES (%s) ON DUPLICATE KEY UPDATE %s`,
+	return pms.promMetricUpsertStmt(
 		`prometheus_node_metric`,
 		"node_uuid, timestamp, category, name, value",
-		`:node_uuid, :timestamp, :category, :name, :value`,
-		`value=VALUES(value)`,
+		":node_uuid, :timestamp, :category, :name, :value",
 	)
 }
 
 // promMetricPodUpsertStmt returns database upsert statement to upsert pod metrics
 func (pms *PromMetricSync) promMetricPodUpsertStmt() string {
-	return fmt.Sprintf(
-		`INSERT INTO %s (%s) VALUES (%s) ON DUPLICATE KEY UPDATE %s`,
+	return pms.promMetricUpsertStmt(
 		`prometheus_pod_metric`,
 		"pod_uuid, timestamp, category, name, value",
-		`:pod_uuid, :timestamp, :category, :name, :value`,
-		`value=VALUES(value)`,
+		":pod_uuid, :timestamp, :category, :name, :value",
 	)
 }
 
 // promMetricContainerUpsertStmt returns database upsert statement to upsert container metrics
 func (pms *PromMetricSync) promMetricContainerUpsertStmt() string {
-	return fmt.Sprintf(
-		`INSERT INTO %s (%s) VALUES (%s) ON DUPLICATE KEY UPDATE %s`,
+	return pms.promMetricUpsertStmt(
 		`prometheus_container_metric`,
-		"container_id, timestamp, category, name, value",
-		`:container_id, :timestamp, :category, :name, :value`,
-		`value=VALUES(value)`,
+		"container_uuid, timestamp, category, name, value",
+		":container_uuid, :timestamp, :category, :name, :value",
 	)
+}
+
+func (pms *PromMetricSync) promMetricUpsertStmt(table, columns, values string) string {
+	switch {
+	case kdatabase.IsPostgreSQLDriver(pms.db.DriverName()):
+		return fmt.Sprintf(
+			`INSERT INTO %s (%s) VALUES (%s) ON CONFLICT ON CONSTRAINT pk_%s DO UPDATE SET value=EXCLUDED.value`,
+			table,
+			columns,
+			values,
+			table,
+		)
+	default:
+		return fmt.Sprintf(
+			`INSERT INTO %s (%s) VALUES (%s) ON DUPLICATE KEY UPDATE value=VALUES(value)`,
+			table,
+			columns,
+			values,
+		)
+	}
 }
 
 func (pms *PromMetricSync) run(

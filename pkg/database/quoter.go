@@ -13,10 +13,10 @@ type Quoter struct {
 func NewQuoter(db *sqlx.DB) *Quoter {
 	var qc string
 
-	switch db.DriverName() {
-	case MySQL:
+	switch {
+	case IsMySQLDriver(db.DriverName()):
 		qc = "`"
-	case PostgreSQL:
+	case IsPostgreSQLDriver(db.DriverName()):
 		qc = `"`
 	}
 

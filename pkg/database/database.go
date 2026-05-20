@@ -47,7 +47,12 @@ func NewFromSqlxDb(c *database.Config, log logr.Logger, otherDB *sqlx.DB) (*Data
 		RegisterDrivers(log)
 	})
 
-	db := sqlx.NewDb(otherDB.DB, "icinga-"+c.Type)
+	driverName, ok := DriverNameForType(c.Type)
+	if !ok {
+		return nil, fmt.Errorf("unsupported database type %q", c.Type)
+	}
+
+	db := sqlx.NewDb(otherDB.DB, driverName)
 
 	db.Mapper = reflectx.NewMapperFunc("db", strcase.Snake)
 
@@ -121,11 +126,11 @@ func (db *Database) BuildUpsertStmt(subject interface{}) (stmt string, placehold
 
 	var clause, setFormat string
 	quoted := db.QuoteIdentifier("%[1]s")
-	switch db.DriverName() {
-	case MySQL:
+	switch {
+	case IsMySQLDriver(db.DriverName()):
 		clause = "ON DUPLICATE KEY UPDATE"
 		setFormat = fmt.Sprintf("%[1]s = VALUES(%[1]s)", quoted)
-	case PostgreSQL:
+	case IsPostgreSQLDriver(db.DriverName()):
 		clause = fmt.Sprintf("ON CONFLICT ON CONSTRAINT pk_%s DO UPDATE SET", table)
 		setFormat = `"%[1]s" = EXCLUDED."%[1]s"`
 	}

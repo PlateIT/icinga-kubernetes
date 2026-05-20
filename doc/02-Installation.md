@@ -23,7 +23,7 @@ including the database, common setup approaches include the following:
 
 ### Setting up the Database
 
-A MySQL (≥8.0) or MariaDB (≥10.5) database is required to run Icinga for Kubernetes.
+A MySQL (≥8.0), MariaDB (≥10.5), or PostgreSQL database is required to run Icinga for Kubernetes.
 Please follow the steps, which guide you through setting up the database and user, and importing the schema.
 
 #### Setting up a MySQL or MariaDB Database
@@ -37,6 +37,17 @@ GRANT ALL ON kubernetes.* TO 'kubernetes'@'localhost';
 ```
 
 Icinga for Kubernetes automatically imports the schema on first start and also applies schema migrations if required.
+
+#### Setting up a PostgreSQL Database
+
+Set up a PostgreSQL database for Icinga for Kubernetes:
+
+```
+CREATE USER kubernetes WITH PASSWORD 'CHANGEME';
+CREATE DATABASE kubernetes OWNER kubernetes;
+```
+
+Set `database.type` to `pgsql` in the Icinga for Kubernetes configuration.
 
 ### Running Within Kubernetes
 
