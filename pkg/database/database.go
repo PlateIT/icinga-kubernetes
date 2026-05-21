@@ -276,6 +276,8 @@ func (db *Database) NamedBulkExec(
 						return retry.WithBackoff(
 							ctx,
 							func(ctx context.Context) error {
+								b = deduplicateRows(b)
+
 								_, err := db.NamedExecContext(ctx, query, b)
 								if err != nil {
 									return CantPerformQuery(err, query)
@@ -430,6 +432,26 @@ func (db *Database) DeleteStreamed(
 		ids,
 		features...,
 	)
+}
+
+func deduplicateRows(rows []interface{}) []interface{} {
+	if len(rows) < 2 {
+		return rows
+	}
+
+	seen := make(map[string]struct{}, len(rows))
+	deduplicated := rows[:0]
+	for _, row := range rows {
+		key := fmt.Sprintf("%#v", row)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+
+		seen[key] = struct{}{}
+		deduplicated = append(deduplicated, row)
+	}
+
+	return deduplicated
 }
 
 // UpsertStreamed bulk upserts the specified entities via NamedBulkExec.
