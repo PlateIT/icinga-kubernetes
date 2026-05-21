@@ -3,6 +3,8 @@ package database
 import (
 	"context"
 	"fmt"
+	"strings"
+
 	"github.com/icinga/icinga-go-library/backoff"
 	"github.com/icinga/icinga-go-library/com"
 	"github.com/icinga/icinga-go-library/periodic"
@@ -24,8 +26,10 @@ func (stmt *CleanupStmt) Build(driverName string, limit uint64) string {
 	case IsMySQLDriver(driverName):
 		return fmt.Sprintf(`DELETE FROM %[1]s WHERE %[2]s < :time LIMIT %[3]d`, stmt.Table, stmt.Column, limit)
 	case IsPostgreSQLDriver(driverName):
+		pkColumns := strings.TrimPrefix(strings.TrimSuffix(stmt.PK, ")"), "(")
+
 		return fmt.Sprintf(`WITH rows AS (SELECT %[1]s FROM %[2]s WHERE %[3]s < :time LIMIT %[4]d)
-DELETE FROM %[2]s WHERE %[1]s IN (SELECT %[1]s FROM rows)`, stmt.PK, stmt.Table, stmt.Column, limit)
+DELETE FROM %[2]s WHERE %[5]s IN (SELECT %[1]s FROM rows)`, pkColumns, stmt.Table, stmt.Column, limit, stmt.PK)
 	default:
 		panic(fmt.Sprintf("invalid database type %s", driverName))
 	}
@@ -104,7 +108,6 @@ type cleanupWhere struct {
 
 func (db *Database) PeriodicCleanup(ctx context.Context, stmt CleanupStmt) error {
 	errs := make(chan error, 1)
-	defer close(errs)
 
 	periodic.Start(ctx, time.Hour, func(tick periodic.Tick) {
 		olderThan := tick.Time.AddDate(0, 0, -1)
