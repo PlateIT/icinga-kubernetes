@@ -74,6 +74,7 @@ func (e *EndpointSlice) Obtain(k8s kmetav1.Object, clusterUuid types.UUID) {
 		})
 	}
 
+	var latestTargetRef *EndpointTargetRef
 	for _, endpoint := range endpointSlice.Endpoints {
 		var hostName, nodeName string
 		if endpoint.Hostname != nil {
@@ -128,24 +129,28 @@ func (e *EndpointSlice) Obtain(k8s kmetav1.Object, clusterUuid types.UUID) {
 				})
 			}
 		}
-		var targetRef v1.ObjectReference
+		var objectRef v1.ObjectReference
 		if endpoint.TargetRef != nil {
-			targetRef = *endpoint.TargetRef
+			objectRef = *endpoint.TargetRef
 		}
 		var kind sql.NullString
-		if targetRef.Kind != "" {
-			kind.String = targetRef.Kind
+		if objectRef.Kind != "" {
+			kind.String = objectRef.Kind
 			kind.Valid = true
 		}
-		e.EndpointTargetRefs = append(e.EndpointTargetRefs, EndpointTargetRef{
+		latestTargetRef = &EndpointTargetRef{
 			EndpointSliceUuid: e.Uuid,
 			Kind:              kind,
-			Namespace:         targetRef.Namespace,
-			Name:              targetRef.Name,
-			Uid:               targetRef.UID,
-			ApiVersion:        targetRef.APIVersion,
-			ResourceVersion:   targetRef.ResourceVersion,
-		})
+			Namespace:         objectRef.Namespace,
+			Name:              objectRef.Name,
+			Uid:               objectRef.UID,
+			ApiVersion:        objectRef.APIVersion,
+			ResourceVersion:   objectRef.ResourceVersion,
+		}
+	}
+
+	if latestTargetRef != nil {
+		e.EndpointTargetRefs = append(e.EndpointTargetRefs, *latestTargetRef)
 	}
 }
 

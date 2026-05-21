@@ -85,10 +85,6 @@ func (mux *channelMultiplexer[T]) Run(ctx context.Context) error {
 	}
 
 	defer func() {
-		for _, channelToClose := range mux.in {
-			close(channelToClose)
-		}
-
 		for _, channelToClose := range mux.out {
 			close(channelToClose)
 		}
