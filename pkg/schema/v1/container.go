@@ -626,6 +626,8 @@ func warmup(ctx context.Context, db *database.Database) error {
 // truncate truncates a UTF-8 string from the front to ensure it does not exceed the given byte length.
 // It also removes content before the first newline character if one is found in the truncated string.
 func truncate(s string, n int) string {
+	s = strings.ToValidUTF8(s, "")
+
 	if len(s) <= n {
 		return s
 	}
