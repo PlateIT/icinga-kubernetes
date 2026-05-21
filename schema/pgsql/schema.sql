@@ -7,7 +7,7 @@ CREATE TABLE cluster (
 CREATE TABLE annotation (
   uuid bytea NOT NULL,
   name varchar(317) NOT NULL,
-  value bytea NOT NULL,
+  value text NOT NULL,
   CONSTRAINT pk_annotation PRIMARY KEY (uuid)
 );
 
@@ -156,7 +156,7 @@ CREATE TABLE cron_job (
   last_successful_time bigint NULL DEFAULT NULL,
   icinga_state varchar(255) NOT NULL,
   icinga_state_reason text NOT NULL,
-  yaml bytea DEFAULT NULL,
+  yaml text DEFAULT NULL,
   created bigint NOT NULL,
   CONSTRAINT pk_cron_job PRIMARY KEY (uuid)
 );
@@ -189,7 +189,7 @@ CREATE TABLE daemon_set (
   update_number_scheduled integer NOT NULL,
   number_available integer NOT NULL,
   number_unavailable integer NOT NULL,
-  yaml bytea DEFAULT NULL,
+  yaml text DEFAULT NULL,
   icinga_state varchar(255) NOT NULL,
   icinga_state_reason text NOT NULL,
   created bigint NOT NULL,
@@ -246,7 +246,7 @@ CREATE TABLE deployment (
   ready_replicas integer NOT NULL,
   available_replicas integer NOT NULL,
   unavailable_replicas integer NOT NULL,
-  yaml bytea DEFAULT NULL,
+  yaml text DEFAULT NULL,
   icinga_state varchar(255) NOT NULL,
   icinga_state_reason text NOT NULL,
   created bigint NOT NULL,
@@ -352,7 +352,7 @@ CREATE TABLE event (
   first_seen bigint NOT NULL,
   last_seen bigint NOT NULL,
   count integer NOT NULL,
-  yaml bytea DEFAULT NULL,
+  yaml text DEFAULT NULL,
   created bigint NOT NULL,
   CONSTRAINT pk_event PRIMARY KEY (uuid)
 );
@@ -365,7 +365,7 @@ CREATE TABLE ingress (
   name varchar(255) NOT NULL,
   uid varchar(255) NOT NULL,
   resource_version varchar(255) NOT NULL,
-  yaml bytea DEFAULT NULL,
+  yaml text DEFAULT NULL,
   created bigint NOT NULL,
   CONSTRAINT pk_ingress PRIMARY KEY (uuid)
 );
@@ -438,7 +438,7 @@ CREATE TABLE job (
   active integer NOT NULL,
   succeeded integer NOT NULL,
   failed integer NOT NULL,
-  yaml bytea DEFAULT NULL,
+  yaml text DEFAULT NULL,
   icinga_state varchar(255) NOT NULL,
   icinga_state_reason text NOT NULL,
   created bigint NOT NULL,
@@ -487,7 +487,7 @@ CREATE TABLE namespace (
   uid varchar(255) NOT NULL,
   resource_version varchar(255) NOT NULL,
   phase varchar(255) NOT NULL,
-  yaml bytea DEFAULT NULL,
+  yaml text DEFAULT NULL,
   created bigint NOT NULL,
   CONSTRAINT pk_namespace PRIMARY KEY (uuid)
 );
@@ -530,7 +530,7 @@ CREATE TABLE node (
   memory_capacity bigint NOT NULL,
   memory_allocatable bigint NOT NULL,
   pod_capacity integer NOT NULL,
-  yaml bytea DEFAULT NULL,
+  yaml text DEFAULT NULL,
   roles varchar(255) NOT NULL,
   machine_id varchar(255) NOT NULL,
   system_uuid varchar(255) NOT NULL,
@@ -596,7 +596,7 @@ CREATE TABLE persistent_volume (
   storage_class varchar(255) NULL DEFAULT NULL,
   volume_source text NOT NULL,
   reclaim_policy varchar(255) NOT NULL,
-  yaml bytea DEFAULT NULL,
+  yaml text DEFAULT NULL,
   created bigint NOT NULL,
   CONSTRAINT pk_persistent_volume PRIMARY KEY (uuid)
 );
@@ -642,7 +642,7 @@ CREATE TABLE pod (
   reason varchar(255) NULL DEFAULT NULL,
   message text NULL DEFAULT NULL,
   qos varchar(255) NULL DEFAULT NULL,
-  yaml bytea DEFAULT NULL,
+  yaml text DEFAULT NULL,
   created bigint NOT NULL,
   CONSTRAINT pk_pod PRIMARY KEY (uuid)
 );
@@ -761,7 +761,7 @@ CREATE TABLE pvc (
   volume_name varchar(253) NULL DEFAULT NULL,
   volume_mode varchar(255) NULL DEFAULT NULL,
   storage_class varchar(255) NULL DEFAULT NULL,
-  yaml bytea DEFAULT NULL,
+  yaml text DEFAULT NULL,
   created bigint NOT NULL,
   CONSTRAINT pk_pvc PRIMARY KEY (uuid)
 );
@@ -802,7 +802,7 @@ CREATE TABLE replica_set (
   fully_labeled_replicas integer NOT NULL,
   ready_replicas integer NOT NULL,
   available_replicas integer NOT NULL,
-  yaml bytea DEFAULT NULL,
+  yaml text DEFAULT NULL,
   icinga_state varchar(255) NOT NULL,
   icinga_state_reason text NOT NULL,
   created bigint NOT NULL,
@@ -895,7 +895,7 @@ CREATE TABLE service (
   allocate_load_balancer_node_ports varchar(255) NOT NULL,
   load_balancer_class varchar(255) NULL DEFAULT NULL,
   internal_traffic_policy varchar(255) NOT NULL,
-  yaml bytea DEFAULT NULL,
+  yaml text DEFAULT NULL,
   created bigint NOT NULL,
   CONSTRAINT pk_service PRIMARY KEY (uuid)
 );
@@ -966,7 +966,7 @@ CREATE TABLE stateful_set (
   current_replicas integer NOT NULL,
   updated_replicas integer NOT NULL,
   available_replicas integer NOT NULL,
-  yaml bytea DEFAULT NULL,
+  yaml text DEFAULT NULL,
   icinga_state varchar(255) NOT NULL,
   icinga_state_reason text NOT NULL,
   created bigint NOT NULL,
