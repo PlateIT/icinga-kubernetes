@@ -1,38 +1,38 @@
 CREATE TABLE cluster (
-  uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
   name varchar(255) NULL DEFAULT NULL,
   CONSTRAINT pk_cluster PRIMARY KEY (uuid)
 );
 
 CREATE TABLE annotation (
-  uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
   name varchar(317) NOT NULL,
   value text NOT NULL,
   CONSTRAINT pk_annotation PRIMARY KEY (uuid)
 );
 
 CREATE TABLE resource_annotation (
-  resource_uuid uuid NOT NULL,
-  annotation_uuid uuid NOT NULL,
+  resource_uuid bytea NOT NULL,
+  annotation_uuid bytea NOT NULL,
   CONSTRAINT pk_resource_annotation PRIMARY KEY (resource_uuid, annotation_uuid)
 );
 
 CREATE TABLE label (
-  uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
   name varchar(317) NOT NULL,
   value varchar(255) NOT NULL,
   CONSTRAINT pk_label PRIMARY KEY (uuid)
 );
 
 CREATE TABLE resource_label (
-  resource_uuid uuid NOT NULL,
-  label_uuid uuid NOT NULL,
+  resource_uuid bytea NOT NULL,
+  label_uuid bytea NOT NULL,
   CONSTRAINT pk_resource_label PRIMARY KEY (resource_uuid, label_uuid)
 );
 
 CREATE TABLE config_map (
-  uuid uuid NOT NULL,
-  cluster_uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
+  cluster_uuid bytea NOT NULL,
   namespace varchar(255) NOT NULL,
   name varchar(253) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -43,20 +43,20 @@ CREATE TABLE config_map (
 );
 
 CREATE TABLE config_map_annotation (
-  config_map_uuid uuid NOT NULL,
-  annotation_uuid uuid NOT NULL,
+  config_map_uuid bytea NOT NULL,
+  annotation_uuid bytea NOT NULL,
   CONSTRAINT pk_config_map_annotation PRIMARY KEY (config_map_uuid, annotation_uuid)
 );
 
 CREATE TABLE config_map_label (
-  config_map_uuid uuid NOT NULL,
-  label_uuid uuid NOT NULL,
+  config_map_uuid bytea NOT NULL,
+  label_uuid bytea NOT NULL,
   CONSTRAINT pk_config_map_label PRIMARY KEY (config_map_uuid, label_uuid)
 );
 
 CREATE TABLE container (
-  uuid uuid NOT NULL,
-  pod_uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
+  pod_uuid bytea NOT NULL,
   name varchar(255) NOT NULL,
   image varchar(512) NOT NULL,
   image_pull_policy varchar(255) NULL DEFAULT NULL,
@@ -75,8 +75,8 @@ CREATE TABLE container (
 );
 
 CREATE TABLE init_container (
-  uuid uuid NOT NULL,
-  pod_uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
+  pod_uuid bytea NOT NULL,
   name varchar(255) NOT NULL,
   image varchar(512) NOT NULL,
   image_pull_policy varchar(255) NULL DEFAULT NULL,
@@ -92,8 +92,8 @@ CREATE TABLE init_container (
 );
 
 CREATE TABLE sidecar_container (
-  uuid uuid NOT NULL,
-  pod_uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
+  pod_uuid bytea NOT NULL,
   name varchar(255) NOT NULL,
   image varchar(512) NOT NULL,
   image_pull_policy varchar(255) NULL DEFAULT NULL,
@@ -112,24 +112,24 @@ CREATE TABLE sidecar_container (
 );
 
 CREATE TABLE container_device (
-  container_uuid uuid NOT NULL,
-  pod_uuid uuid NOT NULL,
+  container_uuid bytea NOT NULL,
+  pod_uuid bytea NOT NULL,
   name varchar(253) NOT NULL,
   path varchar(255) NOT NULL,
   CONSTRAINT pk_container_device PRIMARY KEY (container_uuid, name)
 );
 
 CREATE TABLE container_log (
-  container_uuid uuid NOT NULL,
-  pod_uuid uuid NOT NULL,
+  container_uuid bytea NOT NULL,
+  pod_uuid bytea NOT NULL,
   logs text NOT NULL,
   last_update bigint NOT NULL,
   CONSTRAINT pk_container_log PRIMARY KEY (container_uuid)
 );
 
 CREATE TABLE container_mount (
-  container_uuid uuid NOT NULL,
-  pod_uuid uuid NOT NULL,
+  container_uuid bytea NOT NULL,
+  pod_uuid bytea NOT NULL,
   volume_name varchar(255) NOT NULL,
   path varchar(255) NOT NULL,
   sub_path varchar(255) NULL DEFAULT NULL,
@@ -138,8 +138,8 @@ CREATE TABLE container_mount (
 );
 
 CREATE TABLE cron_job (
-  uuid uuid NOT NULL,
-  cluster_uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
+  cluster_uuid bytea NOT NULL,
   namespace varchar(255) NOT NULL,
   name varchar(255) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -162,20 +162,20 @@ CREATE TABLE cron_job (
 );
 
 CREATE TABLE cron_job_annotation (
-  cron_job_uuid uuid NOT NULL,
-  annotation_uuid uuid NOT NULL,
+  cron_job_uuid bytea NOT NULL,
+  annotation_uuid bytea NOT NULL,
   CONSTRAINT pk_cron_job_annotation PRIMARY KEY (cron_job_uuid, annotation_uuid)
 );
 
 CREATE TABLE cron_job_label (
-  cron_job_uuid uuid NOT NULL,
-  label_uuid uuid NOT NULL,
+  cron_job_uuid bytea NOT NULL,
+  label_uuid bytea NOT NULL,
   CONSTRAINT pk_cron_job_label PRIMARY KEY (cron_job_uuid, label_uuid)
 );
 
 CREATE TABLE daemon_set (
-  uuid uuid NOT NULL,
-  cluster_uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
+  cluster_uuid bytea NOT NULL,
   namespace varchar(255) NOT NULL,
   name varchar(253) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -197,13 +197,13 @@ CREATE TABLE daemon_set (
 );
 
 CREATE TABLE daemon_set_annotation (
-  daemon_set_uuid uuid NOT NULL,
-  annotation_uuid uuid NOT NULL,
+  daemon_set_uuid bytea NOT NULL,
+  annotation_uuid bytea NOT NULL,
   CONSTRAINT pk_daemon_set_annotation PRIMARY KEY (daemon_set_uuid, annotation_uuid)
 );
 
 CREATE TABLE daemon_set_condition (
-  daemon_set_uuid uuid NOT NULL,
+  daemon_set_uuid bytea NOT NULL,
   type varchar(255) NOT NULL,
   status varchar(255) NOT NULL,
   last_transition bigint NOT NULL,
@@ -213,14 +213,14 @@ CREATE TABLE daemon_set_condition (
 );
 
 CREATE TABLE daemon_set_label (
-  daemon_set_uuid uuid NOT NULL,
-  label_uuid uuid NOT NULL,
+  daemon_set_uuid bytea NOT NULL,
+  label_uuid bytea NOT NULL,
   CONSTRAINT pk_daemon_set_label PRIMARY KEY (daemon_set_uuid, label_uuid)
 );
 
 CREATE TABLE daemon_set_owner (
-  daemon_set_uuid uuid NOT NULL,
-  owner_uuid uuid NOT NULL,
+  daemon_set_uuid bytea NOT NULL,
+  owner_uuid bytea NOT NULL,
   kind varchar(255) NOT NULL,
   name varchar(253) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -230,8 +230,8 @@ CREATE TABLE daemon_set_owner (
 );
 
 CREATE TABLE deployment (
-  uuid uuid NOT NULL,
-  cluster_uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
+  cluster_uuid bytea NOT NULL,
   namespace varchar(255)  NOT NULL,
   name varchar(253) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -254,13 +254,13 @@ CREATE TABLE deployment (
 );
 
 CREATE TABLE deployment_annotation (
-  deployment_uuid uuid NOT NULL,
-  annotation_uuid uuid NOT NULL,
+  deployment_uuid bytea NOT NULL,
+  annotation_uuid bytea NOT NULL,
   CONSTRAINT pk_deployment_annotation PRIMARY KEY (deployment_uuid, annotation_uuid)
 );
 
 CREATE TABLE deployment_condition (
-  deployment_uuid uuid NOT NULL,
+  deployment_uuid bytea NOT NULL,
   type varchar(255) NOT NULL,
   status varchar(255) NOT NULL,
   last_update bigint NOT NULL,
@@ -271,14 +271,14 @@ CREATE TABLE deployment_condition (
 );
 
 CREATE TABLE deployment_label (
-  deployment_uuid uuid NOT NULL,
-  label_uuid uuid NOT NULL,
+  deployment_uuid bytea NOT NULL,
+  label_uuid bytea NOT NULL,
   CONSTRAINT pk_deployment_label PRIMARY KEY (deployment_uuid, label_uuid)
 );
 
 CREATE TABLE deployment_owner (
-  deployment_uuid uuid NOT NULL,
-  owner_uuid uuid NOT NULL,
+  deployment_uuid bytea NOT NULL,
+  owner_uuid bytea NOT NULL,
   kind varchar(255) NOT NULL,
   name varchar(253) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -288,8 +288,8 @@ CREATE TABLE deployment_owner (
 );
 
 CREATE TABLE endpoint (
-  uuid uuid NOT NULL,
-  endpoint_slice_uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
+  endpoint_slice_uuid bytea NOT NULL,
   host_name varchar(253) NOT NULL,
   node_name varchar(253) NOT NULL,
   ready varchar(255) NULL DEFAULT NULL,
@@ -304,8 +304,8 @@ CREATE TABLE endpoint (
 );
 
 CREATE TABLE endpoint_slice (
-  uuid uuid NOT NULL,
-  cluster_uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
+  cluster_uuid bytea NOT NULL,
   namespace varchar(255) NOT NULL,
   name varchar(253) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -316,13 +316,13 @@ CREATE TABLE endpoint_slice (
 );
 
 CREATE TABLE endpoint_slice_label (
-  endpoint_slice_uuid uuid NOT NULL,
-  label_uuid uuid NOT NULL,
+  endpoint_slice_uuid bytea NOT NULL,
+  label_uuid bytea NOT NULL,
   CONSTRAINT pk_endpoint_slice_label PRIMARY KEY (endpoint_slice_uuid, label_uuid)
 );
 
 CREATE TABLE endpoint_target_ref (
-  endpoint_slice_uuid uuid NOT NULL,
+  endpoint_slice_uuid bytea NOT NULL,
   kind varchar(255) NULL DEFAULT NULL,
   namespace varchar(255) NOT NULL,
   name varchar(255) NOT NULL,
@@ -333,9 +333,9 @@ CREATE TABLE endpoint_target_ref (
 );
 
 CREATE TABLE event (
-  uuid uuid NOT NULL,
-  cluster_uuid uuid NOT NULL,
-  reference_uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
+  cluster_uuid bytea NOT NULL,
+  reference_uuid bytea NOT NULL,
   namespace varchar(255) NOT NULL,
   name varchar(270) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -359,8 +359,8 @@ CREATE TABLE event (
 
 
 CREATE TABLE ingress (
-  uuid uuid NOT NULL,
-  cluster_uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
+  cluster_uuid bytea NOT NULL,
   namespace varchar(255) NOT NULL,
   name varchar(255) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -371,15 +371,15 @@ CREATE TABLE ingress (
 );
 
 CREATE TABLE ingress_annotation (
-  ingress_uuid uuid NOT NULL,
-  annotation_uuid uuid NOT NULL,
+  ingress_uuid bytea NOT NULL,
+  annotation_uuid bytea NOT NULL,
   CONSTRAINT pk_ingress_annotation PRIMARY KEY (ingress_uuid, annotation_uuid)
 );
 
 CREATE TABLE ingress_backend_resource (
-  resource_uuid uuid NOT NULL,
-  ingress_uuid uuid NOT NULL,
-  ingress_rule_uuid uuid NULL DEFAULT NULL,
+  resource_uuid bytea NOT NULL,
+  ingress_uuid bytea NOT NULL,
+  ingress_rule_uuid bytea NULL DEFAULT NULL,
   api_group varchar(255) NULL DEFAULT NULL,
   kind varchar(255) NOT NULL,
   name varchar(255) NOT NULL,
@@ -387,9 +387,9 @@ CREATE TABLE ingress_backend_resource (
 );
 
 CREATE TABLE ingress_backend_service (
-  service_uuid uuid NOT NULL,
-  ingress_uuid uuid NOT NULL,
-  ingress_rule_uuid uuid NULL DEFAULT NULL,
+  service_uuid bytea NOT NULL,
+  ingress_uuid bytea NOT NULL,
+  ingress_rule_uuid bytea NULL DEFAULT NULL,
   service_name varchar(255) NOT NULL,
   service_port_name varchar(255) NULL DEFAULT NULL,
   service_port_number integer NULL DEFAULT NULL,
@@ -397,15 +397,15 @@ CREATE TABLE ingress_backend_service (
 );
 
 CREATE TABLE ingress_label (
-  ingress_uuid uuid NOT NULL,
-  label_uuid uuid NOT NULL,
+  ingress_uuid bytea NOT NULL,
+  label_uuid bytea NOT NULL,
   CONSTRAINT pk_ingress_label PRIMARY KEY (ingress_uuid, label_uuid)
 );
 
 CREATE TABLE ingress_rule (
-  uuid uuid NOT NULL,
-  backend_uuid uuid NOT NULL,
-  ingress_uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
+  backend_uuid bytea NOT NULL,
+  ingress_uuid bytea NOT NULL,
   host varchar(255) NULL DEFAULT NULL,
   path varchar(255) NULL DEFAULT NULL,
   path_type varchar(255) NOT NULL,
@@ -413,15 +413,15 @@ CREATE TABLE ingress_rule (
 );
 
 CREATE TABLE ingress_tls (
-  ingress_uuid uuid NOT NULL,
+  ingress_uuid bytea NOT NULL,
   tls_host varchar(255) NOT NULL,
   tls_secret varchar(255) NULL DEFAULT NULL,
   CONSTRAINT pk_ingress_tls PRIMARY KEY (ingress_uuid)
 );
 
 CREATE TABLE job (
-  uuid uuid NOT NULL,
-  cluster_uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
+  cluster_uuid bytea NOT NULL,
   namespace varchar(255) NOT NULL,
   name varchar(255) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -446,13 +446,13 @@ CREATE TABLE job (
 );
 
 CREATE TABLE job_annotation (
-  job_uuid uuid NOT NULL,
-  annotation_uuid uuid NOT NULL,
+  job_uuid bytea NOT NULL,
+  annotation_uuid bytea NOT NULL,
   CONSTRAINT pk_job_annotation PRIMARY KEY (job_uuid, annotation_uuid)
 );
 
 CREATE TABLE job_condition (
-  job_uuid uuid NOT NULL,
+  job_uuid bytea NOT NULL,
   type varchar(255) NOT NULL,
   status varchar(255) NOT NULL,
   last_probe bigint NULL DEFAULT NULL,
@@ -463,14 +463,14 @@ CREATE TABLE job_condition (
 );
 
 CREATE TABLE job_label (
-  job_uuid uuid NOT NULL,
-  label_uuid uuid NOT NULL,
+  job_uuid bytea NOT NULL,
+  label_uuid bytea NOT NULL,
   CONSTRAINT pk_job_label PRIMARY KEY (job_uuid, label_uuid)
 );
 
 CREATE TABLE job_owner (
-  job_uuid uuid NOT NULL,
-  owner_uuid uuid NOT NULL,
+  job_uuid bytea NOT NULL,
+  owner_uuid bytea NOT NULL,
   kind varchar(255) NOT NULL,
   name varchar(253) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -480,8 +480,8 @@ CREATE TABLE job_owner (
 );
 
 CREATE TABLE namespace (
-  uuid uuid NOT NULL,
-  cluster_uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
+  cluster_uuid bytea NOT NULL,
   namespace varchar(255) NOT NULL, /* TODO: Remove. A namespace does not have a namespace. */
   name varchar(255) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -493,13 +493,13 @@ CREATE TABLE namespace (
 );
 
 CREATE TABLE namespace_annotation (
-  namespace_uuid uuid NOT NULL,
-  annotation_uuid uuid NOT NULL,
+  namespace_uuid bytea NOT NULL,
+  annotation_uuid bytea NOT NULL,
   CONSTRAINT pk_namespace_annotation PRIMARY KEY (namespace_uuid, annotation_uuid)
 );
 
 CREATE TABLE namespace_condition (
-  namespace_uuid uuid NOT NULL,
+  namespace_uuid bytea NOT NULL,
   type varchar(255) NOT NULL,
   status varchar(255) NOT NULL,
   last_transition bigint NOT NULL,
@@ -509,14 +509,14 @@ CREATE TABLE namespace_condition (
 );
 
 CREATE TABLE namespace_label (
-  namespace_uuid uuid NOT NULL,
-  label_uuid uuid NOT NULL,
+  namespace_uuid bytea NOT NULL,
+  label_uuid bytea NOT NULL,
   CONSTRAINT pk_namespace_label PRIMARY KEY (namespace_uuid, label_uuid)
 );
 
 CREATE TABLE node (
-  uuid uuid NOT NULL,
-  cluster_uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
+  cluster_uuid bytea NOT NULL,
   namespace varchar(255) NOT NULL,
   name varchar(253) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -549,13 +549,13 @@ CREATE TABLE node (
 );
 
 CREATE TABLE node_annotation (
-  node_uuid uuid NOT NULL,
-  annotation_uuid uuid NOT NULL,
+  node_uuid bytea NOT NULL,
+  annotation_uuid bytea NOT NULL,
   CONSTRAINT pk_node_annotation PRIMARY KEY (node_uuid, annotation_uuid)
 );
 
 CREATE TABLE node_condition (
-  node_uuid uuid NOT NULL,
+  node_uuid bytea NOT NULL,
   type varchar(255) NOT NULL,
   status varchar(255) NOT NULL,
   last_heartbeat bigint NOT NULL,
@@ -566,13 +566,13 @@ CREATE TABLE node_condition (
 );
 
 CREATE TABLE node_label (
-  node_uuid uuid NOT NULL,
-  label_uuid uuid NOT NULL,
+  node_uuid bytea NOT NULL,
+  label_uuid bytea NOT NULL,
   CONSTRAINT pk_node_label PRIMARY KEY (node_uuid, label_uuid)
 );
 
 CREATE TABLE node_volume (
-  node_uuid uuid NOT NULL,
+  node_uuid bytea NOT NULL,
   name varchar(253) NOT NULL,
   device_path varchar(255) NOT NULL,
   mounted varchar(255) NOT NULL,
@@ -580,8 +580,8 @@ CREATE TABLE node_volume (
 );
 
 CREATE TABLE persistent_volume (
-  uuid uuid NOT NULL,
-  cluster_uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
+  cluster_uuid bytea NOT NULL,
   namespace varchar(255) NOT NULL,
   name varchar(253) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -602,13 +602,13 @@ CREATE TABLE persistent_volume (
 );
 
 CREATE TABLE persistent_volume_annotation (
-  persistent_volume_uuid uuid NOT NULL,
-  annotation_uuid uuid NOT NULL,
+  persistent_volume_uuid bytea NOT NULL,
+  annotation_uuid bytea NOT NULL,
   CONSTRAINT pk_persistent_volume_annotation PRIMARY KEY (persistent_volume_uuid, annotation_uuid)
 );
 
 CREATE TABLE persistent_volume_claim_ref (
-  persistent_volume_uuid uuid NOT NULL,
+  persistent_volume_uuid bytea NOT NULL,
   kind varchar(255) NOT NULL,
   name varchar(253) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -616,14 +616,14 @@ CREATE TABLE persistent_volume_claim_ref (
 );
 
 CREATE TABLE persistent_volume_label (
-  persistent_volume_uuid uuid NOT NULL,
-  label_uuid uuid NOT NULL,
+  persistent_volume_uuid bytea NOT NULL,
+  label_uuid bytea NOT NULL,
   CONSTRAINT pk_persistent_volume_label PRIMARY KEY (persistent_volume_uuid, label_uuid)
 );
 
 CREATE TABLE pod (
-  uuid uuid NOT NULL,
-  cluster_uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
+  cluster_uuid bytea NOT NULL,
   namespace varchar(255) NOT NULL,
   name varchar(253) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -648,13 +648,13 @@ CREATE TABLE pod (
 );
 
 CREATE TABLE pod_annotation (
-  pod_uuid uuid NOT NULL,
-  annotation_uuid uuid NOT NULL,
+  pod_uuid bytea NOT NULL,
+  annotation_uuid bytea NOT NULL,
   CONSTRAINT pk_pod_annotation PRIMARY KEY (pod_uuid, annotation_uuid)
 );
 
 CREATE TABLE pod_condition (
-  pod_uuid uuid NOT NULL,
+  pod_uuid bytea NOT NULL,
   type varchar(255) NOT NULL,
   status varchar(255) NOT NULL,
   last_probe bigint NULL DEFAULT NULL,
@@ -665,8 +665,8 @@ CREATE TABLE pod_condition (
 );
 
 CREATE TABLE pod_label (
-  pod_uuid uuid NOT NULL,
-  label_uuid uuid NOT NULL,
+  pod_uuid bytea NOT NULL,
+  label_uuid bytea NOT NULL,
   CONSTRAINT pk_pod_label PRIMARY KEY (pod_uuid, label_uuid)
 );
 
@@ -684,8 +684,8 @@ CREATE TABLE pod_metrics (
 );
 
 CREATE TABLE pod_owner (
-  pod_uuid uuid NOT NULL,
-  owner_uuid uuid NOT NULL,
+  pod_uuid bytea NOT NULL,
+  owner_uuid bytea NOT NULL,
   kind varchar(255) NOT NULL,
   name varchar(253) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -695,7 +695,7 @@ CREATE TABLE pod_owner (
 );
 
 CREATE TABLE pod_pvc (
-  pod_uuid uuid NOT NULL,
+  pod_uuid bytea NOT NULL,
   volume_name varchar(253) NOT NULL,
   claim_name varchar(253) NOT NULL,
   read_only varchar(255) NOT NULL,
@@ -703,7 +703,7 @@ CREATE TABLE pod_pvc (
 );
 
 CREATE TABLE pod_volume (
-  pod_uuid uuid NOT NULL,
+  pod_uuid bytea NOT NULL,
   volume_name varchar(255) NOT NULL,
   type varchar(255) NOT NULL,
   source text NOT NULL,
@@ -711,7 +711,7 @@ CREATE TABLE pod_volume (
 );
 
 CREATE TABLE prometheus_cluster_metric (
-  cluster_uuid uuid NOT NULL,
+  cluster_uuid bytea NOT NULL,
   timestamp bigint NOT NULL,
   category varchar(255) NOT NULL,
   name varchar(255) NOT NULL,
@@ -720,7 +720,7 @@ CREATE TABLE prometheus_cluster_metric (
 );
 
 CREATE TABLE prometheus_container_metric (
-  container_uuid uuid NOT NULL,
+  container_uuid bytea NOT NULL,
   timestamp bigint NOT NULL,
   category varchar(255) NOT NULL,
   name varchar(255) NOT NULL,
@@ -729,7 +729,7 @@ CREATE TABLE prometheus_container_metric (
 );
 
 CREATE TABLE prometheus_node_metric (
-  node_uuid uuid NOT NULL,
+  node_uuid bytea NOT NULL,
   timestamp bigint NOT NULL,
   category varchar(255) NOT NULL,
   name varchar(255) NOT NULL,
@@ -738,7 +738,7 @@ CREATE TABLE prometheus_node_metric (
 );
 
 CREATE TABLE prometheus_pod_metric (
-  pod_uuid uuid NOT NULL,
+  pod_uuid bytea NOT NULL,
   timestamp bigint NOT NULL,
   category varchar(255) NOT NULL,
   name varchar(255) NOT NULL,
@@ -747,8 +747,8 @@ CREATE TABLE prometheus_pod_metric (
 );
 
 CREATE TABLE pvc (
-  uuid uuid NOT NULL,
-  cluster_uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
+  cluster_uuid bytea NOT NULL,
   namespace varchar(255) NOT NULL,
   name varchar(253) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -767,13 +767,13 @@ CREATE TABLE pvc (
 );
 
 CREATE TABLE pvc_annotation (
-  pvc_uuid uuid NOT NULL,
-  annotation_uuid uuid NOT NULL,
+  pvc_uuid bytea NOT NULL,
+  annotation_uuid bytea NOT NULL,
   CONSTRAINT pk_pvc_annotation PRIMARY KEY (pvc_uuid, annotation_uuid)
 );
 
 CREATE TABLE pvc_condition (
-  pvc_uuid uuid NOT NULL,
+  pvc_uuid bytea NOT NULL,
   type varchar(255) NOT NULL,
   status varchar(255) NOT NULL,
   last_probe bigint NULL DEFAULT NULL,
@@ -784,14 +784,14 @@ CREATE TABLE pvc_condition (
 );
 
 CREATE TABLE pvc_label (
-  pvc_uuid uuid NOT NULL,
-  label_uuid uuid NOT NULL,
+  pvc_uuid bytea NOT NULL,
+  label_uuid bytea NOT NULL,
   CONSTRAINT pk_pvc_label PRIMARY KEY (pvc_uuid, label_uuid)
 );
 
 CREATE TABLE replica_set (
-  uuid uuid NOT NULL,
-  cluster_uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
+  cluster_uuid bytea NOT NULL,
   namespace varchar(255) NOT NULL,
   name varchar(253) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -810,13 +810,13 @@ CREATE TABLE replica_set (
 );
 
 CREATE TABLE replica_set_annotation (
-  replica_set_uuid uuid NOT NULL,
-  annotation_uuid uuid NOT NULL,
+  replica_set_uuid bytea NOT NULL,
+  annotation_uuid bytea NOT NULL,
   CONSTRAINT pk_replica_set_annotation PRIMARY KEY (replica_set_uuid, annotation_uuid)
 );
 
 CREATE TABLE replica_set_condition (
-  replica_set_uuid uuid NOT NULL,
+  replica_set_uuid bytea NOT NULL,
   type varchar(255) NOT NULL,
   status varchar(255) NOT NULL,
   last_transition bigint NOT NULL,
@@ -826,14 +826,14 @@ CREATE TABLE replica_set_condition (
 );
 
 CREATE TABLE replica_set_label (
-  replica_set_uuid uuid NOT NULL,
-  label_uuid uuid NOT NULL,
+  replica_set_uuid bytea NOT NULL,
+  label_uuid bytea NOT NULL,
   CONSTRAINT pk_replica_set_label PRIMARY KEY (replica_set_uuid, label_uuid)
 );
 
 CREATE TABLE replica_set_owner (
-  replica_set_uuid uuid NOT NULL,
-  owner_uuid uuid NOT NULL,
+  replica_set_uuid bytea NOT NULL,
+  owner_uuid bytea NOT NULL,
   kind varchar(255) NOT NULL,
   name varchar(253) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -843,8 +843,8 @@ CREATE TABLE replica_set_owner (
 );
 
 CREATE TABLE secret (
-  uuid uuid NOT NULL,
-  cluster_uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
+  cluster_uuid bytea NOT NULL,
   namespace varchar(255) NOT NULL,
   name varchar(253) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -856,27 +856,27 @@ CREATE TABLE secret (
 );
 
 CREATE TABLE secret_annotation (
-  secret_uuid uuid NOT NULL,
-  annotation_uuid uuid NOT NULL,
+  secret_uuid bytea NOT NULL,
+  annotation_uuid bytea NOT NULL,
   CONSTRAINT pk_secret_annotation PRIMARY KEY (secret_uuid, annotation_uuid)
 );
 
 CREATE TABLE secret_label (
-  secret_uuid uuid NOT NULL,
-  label_uuid uuid NOT NULL,
+  secret_uuid bytea NOT NULL,
+  label_uuid bytea NOT NULL,
   CONSTRAINT pk_secret_label PRIMARY KEY (secret_uuid, label_uuid)
 );
 
 CREATE TABLE selector (
-  uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
   name varchar(317) NOT NULL,
   value varchar(255) NOT NULL,
   CONSTRAINT pk_selector PRIMARY KEY (uuid)
 );
 
 CREATE TABLE service (
-  uuid uuid NOT NULL,
-  cluster_uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
+  cluster_uuid bytea NOT NULL,
   namespace varchar(255) NOT NULL,
   name varchar(253) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -901,13 +901,13 @@ CREATE TABLE service (
 );
 
 CREATE TABLE service_annotation (
-  service_uuid uuid NOT NULL,
-  annotation_uuid uuid NOT NULL,
+  service_uuid bytea NOT NULL,
+  annotation_uuid bytea NOT NULL,
   CONSTRAINT pk_service_annotation PRIMARY KEY (service_uuid, annotation_uuid)
 );
 
 CREATE TABLE service_condition (
-  service_uuid uuid NOT NULL,
+  service_uuid bytea NOT NULL,
   type varchar(255) NOT NULL,
   status varchar(255) NOT NULL,
   observed_generation bigint NULL DEFAULT NULL,
@@ -918,19 +918,19 @@ CREATE TABLE service_condition (
 );
 
 CREATE TABLE service_label (
-  service_uuid uuid NOT NULL,
-  label_uuid uuid NOT NULL,
+  service_uuid bytea NOT NULL,
+  label_uuid bytea NOT NULL,
   CONSTRAINT pk_service_label PRIMARY KEY (service_uuid, label_uuid)
 );
 
 CREATE TABLE service_pod (
-  service_uuid uuid NOT NULL,
-  pod_uuid uuid NOT NULL,
+  service_uuid bytea NOT NULL,
+  pod_uuid bytea NOT NULL,
   CONSTRAINT pk_service_pod PRIMARY KEY (service_uuid, pod_uuid)
 );
 
 CREATE TABLE service_port (
-  service_uuid uuid NOT NULL,
+  service_uuid bytea NOT NULL,
   name varchar(255) NOT NULL,
   protocol varchar(255) NOT NULL,
   app_protocol varchar(255) NOT NULL,
@@ -941,14 +941,14 @@ CREATE TABLE service_port (
 );
 
 CREATE TABLE service_selector (
-  service_uuid uuid NOT NULL,
-  selector_uuid uuid NOT NULL,
+  service_uuid bytea NOT NULL,
+  selector_uuid bytea NOT NULL,
   CONSTRAINT pk_service_selector PRIMARY KEY (service_uuid, selector_uuid)
 );
 
 CREATE TABLE stateful_set (
-  uuid uuid NOT NULL,
-  cluster_uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
+  cluster_uuid bytea NOT NULL,
   namespace varchar(255) NOT NULL,
   name varchar(253) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -974,13 +974,13 @@ CREATE TABLE stateful_set (
 );
 
 CREATE TABLE stateful_set_annotation (
-  stateful_set_uuid uuid NOT NULL,
-  annotation_uuid uuid NOT NULL,
+  stateful_set_uuid bytea NOT NULL,
+  annotation_uuid bytea NOT NULL,
   CONSTRAINT pk_stateful_set_annotation PRIMARY KEY (stateful_set_uuid, annotation_uuid)
 );
 
 CREATE TABLE stateful_set_condition (
-  stateful_set_uuid uuid NOT NULL,
+  stateful_set_uuid bytea NOT NULL,
   type varchar(255) NOT NULL,
   status varchar(255) NOT NULL,
   last_transition bigint NOT NULL,
@@ -990,14 +990,14 @@ CREATE TABLE stateful_set_condition (
 );
 
 CREATE TABLE stateful_set_label (
-  stateful_set_uuid uuid NOT NULL,
-  label_uuid uuid NOT NULL,
+  stateful_set_uuid bytea NOT NULL,
+  label_uuid bytea NOT NULL,
   CONSTRAINT pk_stateful_set_label PRIMARY KEY (stateful_set_uuid, label_uuid)
 );
 
 CREATE TABLE stateful_set_owner (
-  stateful_set_uuid uuid NOT NULL,
-  owner_uuid uuid NOT NULL,
+  stateful_set_uuid bytea NOT NULL,
+  owner_uuid bytea NOT NULL,
   kind varchar(255) NOT NULL,
   name varchar(253) NOT NULL,
   uid varchar(255) NOT NULL,
@@ -1007,7 +1007,7 @@ CREATE TABLE stateful_set_owner (
 );
 
 CREATE TABLE favorite (
-  resource_uuid uuid NOT NULL,
+  resource_uuid bytea NOT NULL,
   kind varchar(255) NOT NULL,
   username varchar(254) NOT NULL,
   priority integer,
@@ -1017,8 +1017,8 @@ CREATE TABLE favorite (
 CREATE INDEX idx_favorite_username ON favorite(username, kind);
 
 CREATE TABLE kubernetes_instance (
-  uuid uuid NOT NULL,
-  cluster_uuid uuid NOT NULL,
+  uuid bytea NOT NULL,
+  cluster_uuid bytea NOT NULL,
   version varchar(255) NOT NULL,
   kubernetes_version varchar(255) NOT NULL,
   kubernetes_heartbeat bigint NULL DEFAULT NULL,
@@ -1029,7 +1029,7 @@ CREATE TABLE kubernetes_instance (
 );
 
 CREATE TABLE config (
-  cluster_uuid uuid NOT NULL,
+  cluster_uuid bytea NOT NULL,
   "key" varchar(255) NOT NULL,
   value varchar(255) NOT NULL,
   locked varchar(255) NOT NULL,
