@@ -39,6 +39,8 @@ type Database struct {
 
 	tableSemaphores   map[string]*semaphore.Weighted
 	tableSemaphoresMu sync.Mutex
+	primaryKeys       map[string][]string
+	primaryKeysMu     sync.Mutex
 }
 
 // NewFromSqlxDb returns a new Database connection from the given sqlx.DB.
@@ -62,6 +64,7 @@ func NewFromSqlxDb(c *database.Config, log logr.Logger, otherDB *sqlx.DB) (*Data
 		columnMap:       database.NewColumnMap(db.Mapper),
 		Options:         c.Options,
 		tableSemaphores: make(map[string]*semaphore.Weighted),
+		primaryKeys:     make(map[string][]string),
 		Quoter:          NewQuoter(db),
 	}, nil
 }
@@ -276,7 +279,13 @@ func (db *Database) NamedBulkExec(
 						return retry.WithBackoff(
 							ctx,
 							func(ctx context.Context) error {
-								b = deduplicateRows(b)
+								if IsPostgreSQLDriver(db.DriverName()) {
+									var err error
+									b, err = db.deduplicatePostgresConflictRows(ctx, query, b)
+									if err != nil {
+										return err
+									}
+								}
 
 								_, err := db.NamedExecContext(ctx, query, b)
 								if err != nil {
@@ -432,6 +441,108 @@ func (db *Database) DeleteStreamed(
 		ids,
 		features...,
 	)
+}
+
+func (db *Database) deduplicatePostgresConflictRows(ctx context.Context, query string, rows []interface{}) ([]interface{}, error) {
+	const marker = "ON CONFLICT ON CONSTRAINT "
+
+	if len(rows) < 2 {
+		return rows, nil
+	}
+
+	start := strings.Index(query, marker)
+	if start == -1 {
+		return deduplicateRows(rows), nil
+	}
+
+	constraint := query[start+len(marker):]
+	if end := strings.IndexByte(constraint, ' '); end != -1 {
+		constraint = constraint[:end]
+	}
+
+	columns, err := db.primaryKeyColumns(ctx, constraint)
+	if err != nil {
+		return nil, err
+	}
+	if len(columns) == 0 {
+		return deduplicateRows(rows), nil
+	}
+
+	last := make(map[string]int, len(rows))
+	for i, row := range rows {
+		key, err := db.rowKey(row, columns)
+		if err != nil {
+			return nil, err
+		}
+
+		last[key] = i
+	}
+
+	deduplicated := rows[:0]
+	for i, row := range rows {
+		key, err := db.rowKey(row, columns)
+		if err != nil {
+			return nil, err
+		}
+
+		if last[key] == i {
+			deduplicated = append(deduplicated, row)
+		}
+	}
+
+	return deduplicated, nil
+}
+
+func (db *Database) primaryKeyColumns(ctx context.Context, constraint string) ([]string, error) {
+	db.primaryKeysMu.Lock()
+	if columns, ok := db.primaryKeys[constraint]; ok {
+		db.primaryKeysMu.Unlock()
+
+		return columns, nil
+	}
+	db.primaryKeysMu.Unlock()
+
+	var columns []string
+	if err := db.SelectContext(ctx, &columns, `
+SELECT a.attname
+FROM pg_constraint c
+JOIN pg_class t ON t.oid = c.conrelid
+JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
+WHERE c.conname = $1
+ORDER BY array_position(c.conkey, a.attnum)`, constraint); err != nil {
+		return nil, errors.Wrapf(err, "cannot load columns for constraint %q", constraint)
+	}
+
+	db.primaryKeysMu.Lock()
+	db.primaryKeys[constraint] = columns
+	db.primaryKeysMu.Unlock()
+
+	return columns, nil
+}
+
+func (db *Database) rowKey(row interface{}, columns []string) (string, error) {
+	value := reflect.ValueOf(row)
+	for value.Kind() == reflect.Ptr {
+		if value.IsNil() {
+			return "", fmt.Errorf("cannot build row key from nil %T", row)
+		}
+		value = value.Elem()
+	}
+	if value.Kind() != reflect.Struct {
+		return fmt.Sprintf("%#v", row), nil
+	}
+
+	traversals := db.Mapper.TraversalsByName(value.Type(), columns)
+	parts := make([]string, 0, len(columns))
+	for i, traversal := range traversals {
+		if len(traversal) == 0 {
+			return "", fmt.Errorf("cannot find column %q in %T", columns[i], row)
+		}
+
+		parts = append(parts, fmt.Sprintf("%#v", reflectx.FieldByIndexesReadOnly(value, traversal).Interface()))
+	}
+
+	return strings.Join(parts, "\x00"), nil
 }
 
 func deduplicateRows(rows []interface{}) []interface{} {
