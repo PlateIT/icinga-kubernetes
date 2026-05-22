@@ -315,7 +315,7 @@ func main() {
 			// Severity string `json:"severity"`
 		}
 
-		defer periodic.Start(ctx, time.Hour, func(tick periodic.Tick) {
+		defer periodic.Start(ctx, 5*time.Minute, func(tick periodic.Tick) {
 			r, err := nclient.Incidents(ctx)
 			if err != nil {
 				klog.Errorf("Cannot fetch incidents: %v", err)
