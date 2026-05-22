@@ -256,6 +256,12 @@ func (db *Database) NamedBulkExec(
 
 	bulk := com.Bulk(ctx, arg, count, splitPolicyFactory)
 	with := NewFeatures(features...)
+	var n int64
+	if with.blocking {
+		n = int64(db.Options.MaxConnectionsPerTable)
+	} else {
+		n = 1
+	}
 
 	g.Go(func() error {
 		defer runtime.HandleCrash()
@@ -267,14 +273,14 @@ func (db *Database) NamedBulkExec(
 					return nil
 				}
 
-				if err := sem.Acquire(ctx, 1); err != nil {
+				if err := sem.Acquire(ctx, n); err != nil {
 					return errors.Wrap(err, "cannot acquire semaphore")
 				}
 
 				g.Go(func(b []interface{}) func() error {
 					return func() error {
 						defer runtime.HandleCrash()
-						defer sem.Release(1)
+						defer sem.Release(n)
 
 						return retry.WithBackoff(
 							ctx,
