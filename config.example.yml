@@ -32,7 +32,7 @@ notifications:
 #  url: http://localhost:5680
 
   # Username for authenticating the Icinga for Kubernetes source in Icinga Notifications.
-#  username: source-\d+
+#  username: icinga-kubernetes
 
   # Password for authenticating the Icinga for Kubernetes source in Icinga Notifications.
 #  password: password
