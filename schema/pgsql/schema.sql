@@ -20,7 +20,7 @@ CREATE TABLE resource_annotation (
 CREATE TABLE label (
   uuid bytea NOT NULL,
   name varchar(317) NOT NULL,
-  value varchar(255) NOT NULL,
+  value text NOT NULL,
   CONSTRAINT pk_label PRIMARY KEY (uuid)
 );
 
