@@ -1,4 +1,8 @@
-FROM golang:1 AS base
+FROM bit-base-images-docker-hosted.nexus.bit.admin.ch/bit/ca-bundle:latest AS certs
+FROM docker-hub.nexus.bit.admin.ch/library/golang:1 AS base
+
+COPY --from=certs /certs/ /usr/local/share/ca-certificates/
+RUN update-ca-certificates
 
 # Cache dependencies:
 # The go mod download command uses a cache mount,
@@ -21,21 +25,8 @@ RUN --mount=target=. \
 
 FROM scratch
 
-# addgroup -g 1001 icinga
-COPY <<EOF /etc/group
-icinga:x:1001:
-EOF
-
-# adduser -u 1001 --no-create-home -h /var/empty -s /sbin/nologin --disabled-password -G icinga icinga
-COPY <<EOF /etc/passwd
-icinga:x:1001:1001::/var/empty:/sbin/nologin
-EOF
-
 COPY --from=base /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-
-COPY --from=build /icinga-kubernetes /icinga-kubernetes
-
-USER icinga
+COPY --chmod=755 --from=build /icinga-kubernetes /icinga-kubernetes
 
 ENV PATH=/
 ENTRYPOINT ["icinga-kubernetes"]
