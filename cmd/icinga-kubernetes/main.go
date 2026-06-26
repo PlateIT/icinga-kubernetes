@@ -31,7 +31,9 @@ import (
 	schemav1 "github.com/icinga/icinga-kubernetes/pkg/schema/v1"
 	syncv1 "github.com/icinga/icinga-kubernetes/pkg/sync/v1"
 	k8sMysql "github.com/icinga/icinga-kubernetes/schema/mysql"
+	k8sPgsql "github.com/icinga/icinga-kubernetes/schema/pgsql"
 	"github.com/jmoiron/sqlx"
+	_ "github.com/lib/pq"
 	"github.com/okzk/sdnotify"
 	"github.com/pkg/errors"
 	promapi "github.com/prometheus/client_golang/api"
@@ -178,10 +180,7 @@ func main() {
 			err = retry.WithBackoff(
 				ctx,
 				func(ctx context.Context) (err error) {
-					rows, err := kdb.Query(
-						kdb.Rebind("SELECT table_name FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=?"),
-						cfg.Database.Database,
-					)
+					rows, err := dbTables(kdb, cfg.Database.Database)
 					if err != nil {
 						klog.Fatal(err)
 					}
@@ -197,7 +196,7 @@ func main() {
 							klog.Fatal(err)
 						}
 
-						_, err := kdb.Exec(fmt.Sprintf(`DROP TABLE %s`, tableName))
+						_, err := kdb.Exec(dropTableStmt(kdb, tableName))
 						if err != nil {
 							klog.Fatal(err)
 						}
@@ -218,7 +217,12 @@ func main() {
 	if !hasSchema {
 		dbLog.Info("Importing schema")
 
-		for _, ddl := range strings.Split(k8sMysql.Schema, ";") {
+		schema, err := schemaForDatabase(&cfg.Database, kdb.DriverName())
+		if err != nil {
+			klog.Fatal(err)
+		}
+
+		for _, ddl := range strings.Split(schema, ";") {
 			if ddl = strings.TrimSpace(ddl); ddl != "" {
 				if _, err := kdb.Exec(ddl); err != nil {
 					klog.Fatal(err)
@@ -249,7 +253,7 @@ func main() {
 		klog.Error(errors.Wrap(err, "cannot update cluster"))
 	}
 
-	if _, err := kdb.ExecContext(ctx, "DELETE FROM kubernetes_instance WHERE cluster_uuid = ?", clusterInstance.Uuid); err != nil {
+	if _, err := kdb.ExecContext(ctx, kdb.Rebind("DELETE FROM kubernetes_instance WHERE cluster_uuid = ?"), clusterInstance.Uuid); err != nil {
 		klog.Fatal(errors.Wrap(err, "cannot delete instance"))
 	}
 	// ,omitempty
@@ -340,7 +344,7 @@ func main() {
 						return err
 					}
 
-					rows, err := db.QueryxContext(nctx, q, args...)
+					rows, err := db.QueryxContext(nctx, db.Rebind(q), args...)
 					if err != nil {
 						return err
 					}
@@ -707,17 +711,72 @@ func main() {
 
 // dbHasSchema queries via db whether the database dbName has a table named "kubernetes_schema".
 func dbHasSchema(db *kdatabase.Database, dbName string) (bool, error) {
-	rows, err := db.Query(
-		db.Rebind("SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME='kubernetes_schema'"),
-		dbName,
-	)
+	var rows *sqlx.Rows
+	var err error
+
+	switch {
+	case kdatabase.IsMySQLDriver(db.DriverName()):
+		rows, err = db.Queryx(
+			db.Rebind("SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME='kubernetes_schema'"),
+			dbName,
+		)
+	case kdatabase.IsPostgreSQLDriver(db.DriverName()):
+		rows, err = db.Queryx("SELECT to_regclass('kubernetes_schema') IS NOT NULL")
+	default:
+		return false, fmt.Errorf("unsupported database driver %q", db.DriverName())
+	}
 	if err != nil {
 		return false, err
 	}
 
 	defer func() { _ = rows.Close() }()
 
+	if kdatabase.IsPostgreSQLDriver(db.DriverName()) {
+		var exists bool
+		if rows.Next() {
+			if err := rows.Scan(&exists); err != nil {
+				return false, err
+			}
+		}
+
+		return exists, rows.Err()
+	}
+
 	return rows.Next(), rows.Err()
+}
+
+func dbTables(db *kdatabase.Database, dbName string) (*sqlx.Rows, error) {
+	switch {
+	case kdatabase.IsMySQLDriver(db.DriverName()):
+		return db.Queryx(
+			db.Rebind("SELECT table_name FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=?"),
+			dbName,
+		)
+	case kdatabase.IsPostgreSQLDriver(db.DriverName()):
+		return db.Queryx("SELECT tablename FROM pg_tables WHERE schemaname = current_schema()")
+	default:
+		return nil, fmt.Errorf("unsupported database driver %q", db.DriverName())
+	}
+}
+
+func schemaForDatabase(config *database.Config, driverName string) (string, error) {
+	switch {
+	case kdatabase.IsMySQLDriver(driverName) && config.Type != "pgsql":
+		return k8sMysql.Schema, nil
+	case kdatabase.IsPostgreSQLDriver(driverName), config.Type == "pgsql":
+		return k8sPgsql.Schema, nil
+	default:
+		return "", fmt.Errorf("unsupported database type %q with driver %q", config.Type, driverName)
+	}
+}
+
+func dropTableStmt(db *kdatabase.Database, tableName string) string {
+	stmt := fmt.Sprintf("DROP TABLE %s", db.QuoteIdentifier(tableName))
+	if kdatabase.IsPostgreSQLDriver(db.DriverName()) {
+		stmt += " CASCADE"
+	}
+
+	return stmt
 }
 
 func SyncServicePods(ctx context.Context, db *kdatabase.Database, serviceList v2.ServiceInformer, podList v2.PodInformer) error {
@@ -828,7 +887,7 @@ func SyncServicePods(ctx context.Context, db *kdatabase.Database, serviceList v2
 					return nil
 				}
 
-				_, err := db.ExecContext(ctx, `DELETE FROM service_pod WHERE pod_uuid = ?`, podUuid)
+				_, err := db.ExecContext(ctx, db.Rebind(`DELETE FROM service_pod WHERE pod_uuid = ?`), podUuid)
 				if err != nil {
 					return err
 				}

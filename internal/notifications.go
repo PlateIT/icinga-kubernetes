@@ -41,10 +41,10 @@ func SyncNotificationsConfig(ctx context.Context, db *database.DB, config *notif
 
 			if _, err := tx.ExecContext(
 				ctx,
-				fmt.Sprintf(
+				tx.Rebind(fmt.Sprintf(
 					`DELETE FROM "%s" WHERE "cluster_uuid" = ? AND "key" LIKE ? AND "locked" = ?`,
 					database.TableName(&schemav1.Config{}),
-				),
+				)),
 				clusterUuid,
 				`notifications.%`,
 				_true,
@@ -66,10 +66,10 @@ func SyncNotificationsConfig(ctx context.Context, db *database.DB, config *notif
 		err := db.ExecTx(ctx, func(ctx context.Context, tx *sqlx.Tx) error {
 			if _, err := tx.ExecContext(
 				ctx,
-				fmt.Sprintf(
+				tx.Rebind(fmt.Sprintf(
 					`DELETE FROM "%s" WHERE "cluster_uuid" = ? AND "key" LIKE ? AND "locked" = ?`,
 					database.TableName(&schemav1.Config{}),
-				),
+				)),
 				clusterUuid,
 				`notifications.%`,
 				_true,
