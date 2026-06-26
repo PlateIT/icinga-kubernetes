@@ -9,19 +9,19 @@ Connection configuration for the database to which Icinga for Kubernetes synchro
 This is also the database used in
 [Icinga for Kubernetes Web](https://icinga.com/docs/icinga-kubernetes-web) to view and work with the data.
 
-| Option   | Description                                                       |
-|----------|-------------------------------------------------------------------|
-| type     | **Optional.** Only `mysql` is supported yet which is the default. |
-| host     | **Required.** Database host or absolute Unix socket path.         |
-| port     | **Optional.** Database port. By default, the MySQL port.          |
-| database | **Required.** Database name.                                      |
-| user     | **Required.** Database username.                                  |
-| password | **Optional.** Database password.                                  |
-| tls      | **Optional.** Whether to use TLS.                                 |
-| cert     | **Optional.** Path to TLS client certificate.                     |
-| key      | **Optional.** Path to TLS private key.                            |
-| ca       | **Optional.** Path to TLS CA certificate.                         |
-| insecure | **Optional.** Whether not to verify the peer.                     |
+| Option   | Description                                                                                 |
+|----------|---------------------------------------------------------------------------------------------|
+| type     | **Optional.** Database type. Supported values are `mysql` and `pgsql`. Defaults to `mysql`. |
+| host     | **Required.** Database host or absolute Unix socket path.                                   |
+| port     | **Optional.** Database port. By default, the port of the configured database type.          |
+| database | **Required.** Database name.                                                                |
+| user     | **Required.** Database username.                                                            |
+| password | **Optional.** Database password.                                                            |
+| tls      | **Optional.** Whether to use TLS.                                                           |
+| cert     | **Optional.** Path to TLS client certificate.                                               |
+| key      | **Optional.** Path to TLS private key.                                                      |
+| ca       | **Optional.** Path to TLS CA certificate.                                                   |
+| insecure | **Optional.** Whether not to verify the peer.                                               |
 
 ## Logging Configuration
 
@@ -65,14 +65,14 @@ The configurations set by environment variables override the ones set by YAML.
 
 ## Database Configuration
 
-| Env               | Description                                                       |
-|-------------------|-------------------------------------------------------------------|
-| DATABASE_TYPE     | **Optional.** Only `mysql` is supported yet which is the default. |
-| DATABASE_HOST     | **Required.** Database host or absolute Unix socket path.         |
-| DATABASE_PORT     | **Optional.** Database port. By default, the MySQL port.          |
-| DATABASE_DATABASE | **Required.** Database name.                                      |
-| DATABASE_USER     | **Required.** Database username.                                  |
-| DATABASE_PASSWORD | **Optional.** Database password.                                  |
+| Env               | Description                                                                                 |
+|-------------------|---------------------------------------------------------------------------------------------|
+| DATABASE_TYPE     | **Optional.** Database type. Supported values are `mysql` and `pgsql`. Defaults to `mysql`. |
+| DATABASE_HOST     | **Required.** Database host or absolute Unix socket path.                                   |
+| DATABASE_PORT     | **Optional.** Database port. By default, the port of the configured database type.          |
+| DATABASE_DATABASE | **Required.** Database name.                                                                |
+| DATABASE_USER     | **Required.** Database username.                                                            |
+| DATABASE_PASSWORD | **Optional.** Database password.                                                            |
 
 ## Logging Configuration
 
