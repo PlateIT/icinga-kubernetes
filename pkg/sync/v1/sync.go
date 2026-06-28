@@ -105,7 +105,7 @@ func (s *Sync) sync(ctx context.Context, c *Controller, features ...Feature) err
 
 		return s.db.UpsertStreamed(
 			ctx, sink.UpsertCh(),
-			database.WithCascading(), database.WithOnSuccess(with.OnUpsert()))
+			database.WithBlocking(), database.WithCascading(), database.WithOnSuccess(with.OnUpsert()))
 	})
 	g.Go(func() error {
 		defer runtime.HandleCrash()
