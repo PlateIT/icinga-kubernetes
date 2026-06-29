@@ -182,6 +182,10 @@ func (db *Database) BulkExec(
 
 		for b := range bulk {
 			if err := sem.Acquire(ctx, n); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+
 				return errors.Wrap(err, "cannot acquire semaphore")
 			}
 
@@ -274,6 +278,10 @@ func (db *Database) NamedBulkExec(
 				}
 
 				if err := sem.Acquire(ctx, n); err != nil {
+					if ctx.Err() != nil {
+						return nil
+					}
+
 					return errors.Wrap(err, "cannot acquire semaphore")
 				}
 
