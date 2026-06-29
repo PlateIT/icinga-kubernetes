@@ -38,7 +38,7 @@ func (s *Sync) Run(ctx context.Context, features ...Feature) error {
 	controller := NewController(s.informer, s.log.WithName("controller"))
 
 	with := NewFeatures(features...)
-	warmupKeys := map[string]types.UUID{}
+	warmupKeys := map[string][]types.UUID{}
 
 	if !with.NoWarmup() {
 		var err error
@@ -51,12 +51,12 @@ func (s *Sync) Run(ctx context.Context, features ...Feature) error {
 	return s.sync(ctx, controller, warmupKeys, features...)
 }
 
-func (s *Sync) warmup(ctx context.Context) (map[string]types.UUID, error) {
+func (s *Sync) warmup(ctx context.Context) (map[string][]types.UUID, error) {
 	g, ctx := errgroup.WithContext(ctx)
 
 	meta := &schemav1.Meta{ClusterUuid: cluster.ClusterUuidFromContext(ctx)}
 	query := s.db.BuildSelectStmt(s.factory(), meta) + ` WHERE cluster_uuid=:cluster_uuid`
-	warmupKeys := make(map[string]types.UUID)
+	warmupKeys := make(map[string][]types.UUID)
 
 	entities, errs := s.db.YieldAll(ctx, func() (interface{}, error) {
 		return s.factory(), nil
@@ -81,7 +81,7 @@ func (s *Sync) warmup(ctx context.Context) (map[string]types.UUID, error) {
 					return err
 				}
 
-				warmupKeys[key] = schemav1.EnsureUUID(object.GetUID())
+				warmupKeys[key] = append(warmupKeys[key], schemav1.EnsureUUID(object.GetUID()))
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -91,7 +91,7 @@ func (s *Sync) warmup(ctx context.Context) (map[string]types.UUID, error) {
 	return warmupKeys, g.Wait()
 }
 
-func (s *Sync) sync(ctx context.Context, c *Controller, warmupKeys map[string]types.UUID, features ...Feature) error {
+func (s *Sync) sync(ctx context.Context, c *Controller, warmupKeys map[string][]types.UUID, features ...Feature) error {
 	sink := NewSink(func(i *Item) interface{} {
 		entity := s.factory()
 		entity.Obtain(*i.Item, cluster.ClusterUuidFromContext(ctx))

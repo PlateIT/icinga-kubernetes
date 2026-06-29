@@ -33,7 +33,7 @@ func NewController(
 	}
 }
 
-func (c *Controller) Stream(ctx context.Context, sink *Sink, warmupKeys map[string]types.UUID) error {
+func (c *Controller) Stream(ctx context.Context, sink *Sink, warmupKeys map[string][]types.UUID) error {
 	_, err := c.informer.AddEventHandler(NewEventHandler(c.queue, c.log.WithName("events")))
 	if err != nil {
 		return err
@@ -59,25 +59,29 @@ func (c *Controller) Stream(ctx context.Context, sink *Sink, warmupKeys map[stri
 	return c.stream(ctx, sink)
 }
 
-func (c *Controller) enqueueMissingWarmupDeletes(warmupKeys map[string]types.UUID) error {
-	for key, warmupId := range warmupKeys {
+func (c *Controller) enqueueMissingWarmupDeletes(warmupKeys map[string][]types.UUID) error {
+	for key, warmupIds := range warmupKeys {
 		item, exists, err := c.informer.GetStore().GetByKey(key)
 		if err != nil {
 			return errors.Wrapf(err, "fetching warmed-up key %s failed", key)
 		}
 
+		var currentId types.UUID
 		if exists {
-			currentId := schemav1.EnsureUUID(item.(kmetav1.Object).GetUID())
-			if currentId == warmupId {
-				continue
-			}
+			currentId = schemav1.EnsureUUID(item.(kmetav1.Object).GetUID())
 		}
 
-		c.queue.Add(EventHandlerItem{
-			Type: EventDelete,
-			Id:   warmupId,
-			KKey: key,
-		})
+		for _, warmupId := range warmupIds {
+			if exists && currentId == warmupId {
+				continue
+			}
+
+			c.queue.Add(EventHandlerItem{
+				Type: EventDelete,
+				Id:   warmupId,
+				KKey: key,
+			})
+		}
 	}
 
 	return nil
