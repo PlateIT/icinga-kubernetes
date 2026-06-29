@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -155,7 +157,10 @@ func main() {
 		klog.Fatal(err)
 	}
 
-	g, ctx := errgroup.WithContext(context.Background())
+	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	g, ctx := errgroup.WithContext(rootCtx)
 
 	if hasSchema {
 		var version string
@@ -713,6 +718,11 @@ func main() {
 	})
 
 	if err := g.Wait(); err != nil {
+		if rootCtx.Err() != nil && errors.Is(err, context.Canceled) {
+			klog.Infof("Shutting down Icinga for Kubernetes: %v", err)
+			return
+		}
+
 		klog.Fatal(err)
 	}
 }
