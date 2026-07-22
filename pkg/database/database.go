@@ -369,7 +369,6 @@ func (db *Database) DeleteStreamed(
 			ch := make(chan interface{})
 			g.Go(func() error {
 				defer runtime.HandleCrash()
-				defer close(ch)
 
 				return db.DeleteStreamed(ctx, relation, ch, features...)
 			})
@@ -410,6 +409,11 @@ func (db *Database) DeleteStreamed(
 
 		g.Go(func() error {
 			defer runtime.HandleCrash()
+			defer func() {
+				for _, ch := range streams {
+					close(ch)
+				}
+			}()
 
 			for {
 				select {
@@ -605,7 +609,6 @@ func (db *Database) UpsertStreamed(
 			ch := make(chan interface{})
 			g.Go(func() error {
 				defer runtime.HandleCrash()
-				defer close(ch)
 
 				return db.UpsertStreamed(ctx, ch, WithCascading())
 			})
@@ -646,6 +649,11 @@ func (db *Database) UpsertStreamed(
 
 		g.Go(func() error {
 			defer runtime.HandleCrash()
+			defer func() {
+				for _, ch := range streams {
+					close(ch)
+				}
+			}()
 
 			for {
 				select {
@@ -655,12 +663,9 @@ func (db *Database) UpsertStreamed(
 					}
 
 					for _, relation := range entity.(HasRelations).Relations() {
-						relation := relation
-						g.Go(func() error {
-							defer runtime.HandleCrash()
-
-							return relation.StreamInto(ctx, streams[TableName(relation)])
-						})
+						if err := relation.StreamInto(ctx, streams[TableName(relation)]); err != nil {
+							return err
+						}
 					}
 				case <-ctx.Done():
 					return ctx.Err()
