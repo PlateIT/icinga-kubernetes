@@ -4,7 +4,6 @@ import (
 	"context"
 	"github.com/go-logr/logr"
 	"github.com/icinga/icinga-go-library/com"
-	"github.com/icinga/icinga-go-library/types"
 	"github.com/icinga/icinga-kubernetes/pkg/cluster"
 	"github.com/icinga/icinga-kubernetes/pkg/database"
 	schemav1 "github.com/icinga/icinga-kubernetes/pkg/schema/v1"
@@ -38,7 +37,7 @@ func (s *Sync) Run(ctx context.Context, features ...Feature) error {
 	controller := NewController(s.informer, s.log.WithName("controller"))
 
 	with := NewFeatures(features...)
-	warmupKeys := map[string][]types.UUID{}
+	warmupKeys := warmupObjects{}
 
 	if !with.NoWarmup() {
 		var err error
@@ -51,12 +50,12 @@ func (s *Sync) Run(ctx context.Context, features ...Feature) error {
 	return s.sync(ctx, controller, warmupKeys, features...)
 }
 
-func (s *Sync) warmup(ctx context.Context) (map[string][]types.UUID, error) {
+func (s *Sync) warmup(ctx context.Context) (warmupObjects, error) {
 	g, ctx := errgroup.WithContext(ctx)
 
 	meta := &schemav1.Meta{ClusterUuid: cluster.ClusterUuidFromContext(ctx)}
 	query := s.db.BuildSelectStmt(s.factory(), meta) + ` WHERE cluster_uuid=:cluster_uuid`
-	warmupKeys := make(map[string][]types.UUID)
+	warmupKeys := make(warmupObjects)
 
 	entities, errs := s.db.YieldAll(ctx, func() (interface{}, error) {
 		return s.factory(), nil
@@ -81,7 +80,10 @@ func (s *Sync) warmup(ctx context.Context) (map[string][]types.UUID, error) {
 					return err
 				}
 
-				warmupKeys[key] = append(warmupKeys[key], schemav1.EnsureUUID(object.GetUID()))
+				warmupKeys[key] = append(warmupKeys[key], warmupObject{
+					id:              schemav1.EnsureUUID(object.GetUID()),
+					resourceVersion: object.GetResourceVersion(),
+				})
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -91,17 +93,25 @@ func (s *Sync) warmup(ctx context.Context) (map[string][]types.UUID, error) {
 	return warmupKeys, g.Wait()
 }
 
-func (s *Sync) sync(ctx context.Context, c *Controller, warmupKeys map[string][]types.UUID, features ...Feature) error {
-	sink := NewSink(func(i *Item) interface{} {
+func (s *Sync) sync(ctx context.Context, c *Controller, warmupKeys warmupObjects, features ...Feature) error {
+	with := NewFeatures(features...)
+	toEntity := func(i *Item) interface{} {
 		entity := s.factory()
 		entity.Obtain(*i.Item, cluster.ClusterUuidFromContext(ctx))
 
 		return entity
-	}, func(k interface{}) interface{} {
-		return k
-	})
+	}
+	sink := NewSink(
+		toEntity,
+		func(k interface{}) interface{} { return k },
+		func(ctx context.Context, item *Item) error {
+			if with.OnUpsert() == nil {
+				return nil
+			}
 
-	with := NewFeatures(features...)
+			return with.OnUpsert()(ctx, []any{toEntity(item)})
+		},
+	)
 
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {

@@ -16,18 +16,33 @@ type Sink struct {
 	error      chan error
 	delete     chan interface{}
 	deleteFunc func(interface{}) interface{}
+	replayFunc func(context.Context, *Item) error
 	upsert     chan interface{}
 	upsertFunc func(*Item) interface{}
 }
 
-func NewSink(upsertFunc func(*Item) interface{}, deleteFunc func(interface{}) interface{}) *Sink {
+func NewSink(
+	upsertFunc func(*Item) interface{},
+	deleteFunc func(interface{}) interface{},
+	replayFunc func(context.Context, *Item) error,
+) *Sink {
 	return &Sink{
 		error:      make(chan error),
 		delete:     make(chan interface{}),
 		deleteFunc: deleteFunc,
+		replayFunc: replayFunc,
 		upsert:     make(chan interface{}),
 		upsertFunc: upsertFunc,
 	}
+}
+
+// ReplayUpsert runs the non-database side effects of an upsert for an unchanged object restored during warmup.
+func (s *Sink) ReplayUpsert(ctx context.Context, item *Item) error {
+	if s.replayFunc == nil {
+		return nil
+	}
+
+	return s.replayFunc(ctx, item)
 }
 
 func (s *Sink) Delete(ctx context.Context, key interface{}) error {

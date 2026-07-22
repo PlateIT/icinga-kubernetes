@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
@@ -26,10 +25,8 @@ import (
 	"github.com/icinga/icinga-kubernetes/internal"
 	cachev1 "github.com/icinga/icinga-kubernetes/internal/cache/v1"
 	"github.com/icinga/icinga-kubernetes/pkg/cluster"
-	kcom "github.com/icinga/icinga-kubernetes/pkg/com"
 	"github.com/icinga/icinga-kubernetes/pkg/daemon"
 	kdatabase "github.com/icinga/icinga-kubernetes/pkg/database"
-	"github.com/icinga/icinga-kubernetes/pkg/metrics"
 	"github.com/icinga/icinga-kubernetes/pkg/notifications"
 	schemav1 "github.com/icinga/icinga-kubernetes/pkg/schema/v1"
 	syncv1 "github.com/icinga/icinga-kubernetes/pkg/sync/v1"
@@ -39,8 +36,6 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/okzk/sdnotify"
 	"github.com/pkg/errors"
-	promapi "github.com/prometheus/client_golang/api"
-	promv1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/spf13/pflag"
 	"golang.org/x/sync/errgroup"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -443,45 +438,6 @@ func main() {
 		}
 	}
 
-	if cfg.Prometheus.Url != "" {
-		basicAuthTransport := &kcom.BasicAuthTransport{}
-
-		if cfg.Prometheus.Insecure == "true" {
-			basicAuthTransport.Insecure = true
-		}
-
-		var roundTripper http.RoundTripper = basicAuthTransport
-		if cfg.Prometheus.Username != "" {
-			basicAuthTransport.Username = cfg.Prometheus.Username
-			basicAuthTransport.Password = cfg.Prometheus.Password
-		} else if cfg.Prometheus.Token != "" || cfg.Prometheus.TokenFile != "" {
-			roundTripper = &kcom.BearerTokenTransport{
-				RoundTripper: basicAuthTransport,
-				Token:        cfg.Prometheus.Token,
-				TokenFile:    cfg.Prometheus.TokenFile,
-			}
-		}
-
-		promClient, err := promapi.NewClient(promapi.Config{
-			Address:      cfg.Prometheus.Url,
-			RoundTripper: roundTripper,
-		})
-		if err != nil {
-			klog.Fatal(errors.Wrap(err, "error creating Prometheus client"))
-		}
-
-		promApiClient := promv1.NewAPI(promClient)
-		promMetricSync := metrics.NewPromMetricSync(promApiClient, db, logs.GetChildLogger("prometheus"))
-
-		g.Go(func() error {
-			return promMetricSync.Nodes(ctx, factory.Core().V1().Nodes().Informer())
-		})
-
-		g.Go(func() error {
-			return promMetricSync.Pods(ctx, factory.Core().V1().Pods().Informer())
-		})
-	}
-
 	g.Go(func() error {
 		s := syncv1.NewSync(kdb, factory.Core().V1().Namespaces().Informer(), log.WithName("namespaces"), schemav1.NewNamespace)
 
@@ -682,38 +638,6 @@ func main() {
 			Table:  "event",
 			PK:     "uuid",
 			Column: "created",
-		})
-	})
-
-	g.Go(func() error {
-		return kdb.PeriodicCleanup(ctx, kdatabase.CleanupStmt{
-			Table:  "prometheus_cluster_metric",
-			PK:     "(cluster_uuid, timestamp, category, name)",
-			Column: "timestamp",
-		})
-	})
-
-	g.Go(func() error {
-		return kdb.PeriodicCleanup(ctx, kdatabase.CleanupStmt{
-			Table:  "prometheus_node_metric",
-			PK:     "(node_uuid, timestamp, category, name)",
-			Column: "timestamp",
-		})
-	})
-
-	g.Go(func() error {
-		return kdb.PeriodicCleanup(ctx, kdatabase.CleanupStmt{
-			Table:  "prometheus_pod_metric",
-			PK:     "(pod_uuid, timestamp, category, name)",
-			Column: "timestamp",
-		})
-	})
-
-	g.Go(func() error {
-		return kdb.PeriodicCleanup(ctx, kdatabase.CleanupStmt{
-			Table:  "prometheus_container_metric",
-			PK:     "(container_uuid, timestamp, category, name)",
-			Column: "timestamp",
 		})
 	})
 

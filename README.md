@@ -52,9 +52,11 @@ or correlations used to set up alarms in your environments.
 
 ## Optional Features
 
-### Metric Sync
+### Metrics
 
-Icinga for Kubernetes integrates with Prometheus to synchronize predefined metrics and display charts in the UI.
+Icinga for Kubernetes publishes the cluster-specific Prometheus connection configuration for Icinga for Kubernetes
+Web. The web module queries predefined metrics directly from Prometheus to display charts without copying time-series
+data into the relational database.
 In future versions, we plan to incorporate these metrics into state evaluation and alerting.
 To enable this feature you just have to configure a Prometheus server URL
 that collects metrics from your Kubernetes cluster.

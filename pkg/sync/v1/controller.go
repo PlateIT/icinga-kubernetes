@@ -33,7 +33,7 @@ func NewController(
 	}
 }
 
-func (c *Controller) Stream(ctx context.Context, sink *Sink, warmupKeys map[string][]types.UUID) error {
+func (c *Controller) Stream(ctx context.Context, sink *Sink, warmupKeys warmupObjects) error {
 	_, err := c.informer.AddEventHandler(NewEventHandler(c.queue, c.log.WithName("events")))
 	if err != nil {
 		return err
@@ -56,11 +56,11 @@ func (c *Controller) Stream(ctx context.Context, sink *Sink, warmupKeys map[stri
 		return err
 	}
 
-	return c.stream(ctx, sink)
+	return c.stream(ctx, sink, warmupKeys)
 }
 
-func (c *Controller) enqueueMissingWarmupDeletes(warmupKeys map[string][]types.UUID) error {
-	for key, warmupIds := range warmupKeys {
+func (c *Controller) enqueueMissingWarmupDeletes(warmupKeys warmupObjects) error {
+	for key, warmedObjects := range warmupKeys {
 		item, exists, err := c.informer.GetStore().GetByKey(key)
 		if err != nil {
 			return errors.Wrapf(err, "fetching warmed-up key %s failed", key)
@@ -71,14 +71,14 @@ func (c *Controller) enqueueMissingWarmupDeletes(warmupKeys map[string][]types.U
 			currentId = schemav1.EnsureUUID(item.(kmetav1.Object).GetUID())
 		}
 
-		for _, warmupId := range warmupIds {
-			if exists && currentId == warmupId {
+		for _, warmedObject := range warmedObjects {
+			if exists && currentId == warmedObject.id {
 				continue
 			}
 
 			c.queue.Add(EventHandlerItem{
 				Type: EventDelete,
-				Id:   warmupId,
+				Id:   warmedObject.id,
 				KKey: key,
 			})
 		}
@@ -87,7 +87,7 @@ func (c *Controller) enqueueMissingWarmupDeletes(warmupKeys map[string][]types.U
 	return nil
 }
 
-func (c *Controller) stream(ctx context.Context, sink *Sink) error {
+func (c *Controller) stream(ctx context.Context, sink *Sink, warmupKeys warmupObjects) error {
 	var eventHandlerItem EventHandlerItem
 	var key string
 	var shutdown bool
@@ -126,6 +126,14 @@ func (c *Controller) stream(ctx context.Context, sink *Sink) error {
 			}
 		} else {
 			obj := item.(kmetav1.Object)
+			if warmupKeys.unchangedSinceWarmup(key, obj) {
+				if err := sink.ReplayUpsert(ctx, &Item{Key: key, Item: &obj}); err != nil {
+					return err
+				}
+
+				continue
+			}
+
 			err := sink.Upsert(ctx, &Item{
 				Key:  key,
 				Item: &obj,
