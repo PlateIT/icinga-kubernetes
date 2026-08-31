@@ -52,6 +52,20 @@ func SyncPrometheusConfig(ctx context.Context, db *database.DB, config *metrics.
 			)
 		}
 
+		if config.Token != "" {
+			toDb = append(
+				toDb,
+				schemav1.Config{ClusterUuid: clusterUuid, Key: schemav1.ConfigKeyPrometheusToken, Value: config.Token, Locked: _true},
+			)
+		}
+
+		if config.TokenFile != "" {
+			toDb = append(
+				toDb,
+				schemav1.Config{ClusterUuid: clusterUuid, Key: schemav1.ConfigKeyPrometheusTokenFile, Value: config.TokenFile, Locked: _true},
+			)
+		}
+
 		err := db.ExecTx(ctx, func(ctx context.Context, tx *sqlx.Tx) error {
 			if _, err := tx.ExecContext(
 				ctx,
