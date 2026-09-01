@@ -2,8 +2,8 @@ package pgsql
 
 import _ "embed"
 
-// Schema is a copy of schema.sql. It resides here
-// and not in ../../cmd/icinga-kubernetes/main.go due to go:embed restrictions.
+// InitialMigration creates the PostgreSQL-only v2 schema. It is applied only
+// by the explicit migrate role; application roles never modify or drop schema.
 //
-//go:embed schema.sql
-var Schema string
+//go:embed migrations/001_initial.sql
+var InitialMigration string
