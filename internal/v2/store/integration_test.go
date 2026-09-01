@@ -183,6 +183,14 @@ func TestPostgreSQLLifecycle(t *testing.T) {
 	if err != nil || len(secondPrefixPage.Items) != 1 || secondPrefixPage.NextCursor != "" || secondPrefixPage.Items[0].Name != "demo-z" {
 		t.Fatalf("second prefix page=%#v err=%v", secondPrefixPage, err)
 	}
+	firstIDPage, err := s.List(ctx, ListFilter{Cluster: cluster, OrderByID: true, Limit: 2})
+	if err != nil || len(firstIDPage.Items) != 2 || firstIDPage.NextCursor == "" || firstIDPage.Items[0].ID >= firstIDPage.Items[1].ID {
+		t.Fatalf("first ID page=%#v err=%v", firstIDPage, err)
+	}
+	secondIDPage, err := s.List(ctx, ListFilter{Cluster: cluster, OrderByID: true, Limit: 2, Cursor: firstIDPage.NextCursor})
+	if err != nil || len(secondIDPage.Items) != 1 || secondIDPage.NextCursor != "" || secondIDPage.Items[0].ID <= firstIDPage.Items[1].ID {
+		t.Fatalf("second ID page=%#v err=%v", secondIDPage, err)
+	}
 	resolution, err := s.ResolveSelector(ctx, ListFilter{Cluster: cluster, Labels: map[string]string{"app": "demo"}})
 	if err != nil || resolution.Matched != 3 || len(resolution.Items) != 3 || resolution.Counts[model.StateOK] != 3 {
 		t.Fatalf("selector resolution=%#v err=%v", resolution, err)

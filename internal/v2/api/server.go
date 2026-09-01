@@ -1041,12 +1041,20 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) resources(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	if err := validateResourceListQuery(q); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if q.Get("name") != "" && q.Get("namePrefix") != "" {
 		writeError(w, http.StatusBadRequest, "name and namePrefix are mutually exclusive")
 		return
 	}
-	if len(q.Get("namePrefix")) > 512 || strings.ContainsRune(q.Get("namePrefix"), '\x00') {
-		writeError(w, http.StatusBadRequest, "invalid namePrefix")
+	if q.Get("order") != "" && q.Get("order") != "id" {
+		writeError(w, http.StatusBadRequest, "invalid order")
+		return
+	}
+	if q.Get("order") == "id" && q.Get("namePrefix") != "" {
+		writeError(w, http.StatusBadRequest, "order=id and namePrefix are mutually exclusive")
 		return
 	}
 	if cursor := q.Get("cursor"); len(cursor) > 4096 || (cursor != "" && !base64URLPattern.MatchString(cursor)) {
@@ -1070,7 +1078,7 @@ func (s *Server) resources(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
-	f := store.ListFilter{Cluster: cluster, Group: q.Get("group"), Version: q.Get("version"), Kind: q.Get("kind"), Namespace: q.Get("namespace"), Name: q.Get("name"), NamePrefix: q.Get("namePrefix"), Labels: labels, Limit: limit, Cursor: q.Get("cursor")}
+	f := store.ListFilter{Cluster: cluster, Group: q.Get("group"), Version: q.Get("version"), Kind: q.Get("kind"), Namespace: q.Get("namespace"), Name: q.Get("name"), NamePrefix: q.Get("namePrefix"), Labels: labels, Limit: limit, Cursor: q.Get("cursor"), OrderByID: q.Get("order") == "id"}
 	if state := q.Get("state"); state != "" {
 		f.States = []model.State{model.State(state)}
 	}
@@ -1082,6 +1090,33 @@ func (s *Server) resources(w http.ResponseWriter, r *http.Request) {
 	p.Freshness = s.localFreshness(r.Context())
 	w.Header().Set("X-Icinga-Freshness", p.Freshness)
 	writeJSON(w, 200, p)
+}
+
+func validateResourceListQuery(q url.Values) error {
+	maximums := map[string]int{
+		"cluster": 253, "group": 512, "version": 512, "kind": 128,
+		"namespace": 253, "name": 512, "namePrefix": 512, "labels": 4096,
+		"state": 8, "limit": 4, "order": 2, "cursor": 4096,
+	}
+	for name, maximum := range maximums {
+		values := q[name]
+		if len(values) > 1 || (len(values) == 1 && (len(values[0]) > maximum || strings.ContainsRune(values[0], '\x00'))) {
+			return fmt.Errorf("invalid %s", name)
+		}
+	}
+	if cluster := q.Get("cluster"); cluster != "" && !businessProcessClusterPattern.MatchString(cluster) {
+		return errors.New("invalid cluster")
+	}
+	if state := q.Get("state"); state != "" && state != "ok" && state != "warning" && state != "critical" && state != "unknown" {
+		return errors.New("invalid state")
+	}
+	if value := q.Get("limit"); value != "" {
+		limit, err := strconv.Atoi(value)
+		if err != nil || limit < 1 || limit > 1000 {
+			return errors.New("limit must be between 1 and 1000")
+		}
+	}
+	return nil
 }
 
 func (s *Server) resourceTypes(w http.ResponseWriter, r *http.Request) {

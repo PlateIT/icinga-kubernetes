@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/icinga/icinga-kubernetes/internal/v2/model"
 )
 
@@ -25,6 +26,7 @@ type ListFilter struct {
 	OwnerUID                                                   string
 	Limit                                                      int
 	Cursor                                                     string
+	OrderByID                                                  bool
 }
 
 type Page struct {
@@ -406,7 +408,9 @@ func (s Store) List(ctx context.Context, f ListFilter) (Page, error) {
 		return Page{}, err
 	}
 	order := "r.sort_id"
-	if f.NamePrefix != "" {
+	if f.OrderByID {
+		order = "r.id"
+	} else if f.NamePrefix != "" {
 		order = "lower(r.name),r.sort_id"
 		if f.Cursor != "" {
 			name, sortID, cursorErr := decodeNameCursor(f.Cursor)
@@ -442,7 +446,9 @@ func (s Store) List(ctx context.Context, f ListFilter) (Page, error) {
 	}
 	if len(p.Items) > f.Limit {
 		last := strconv.FormatInt(sortIDs[f.Limit-1], 10)
-		if f.NamePrefix != "" {
+		if f.OrderByID {
+			last = p.Items[f.Limit-1].ID
+		} else if f.NamePrefix != "" {
 			encoded, marshalErr := json.Marshal([]any{strings.ToLower(p.Items[f.Limit-1].Name), sortIDs[f.Limit-1]})
 			if marshalErr != nil {
 				return Page{}, marshalErr
@@ -513,6 +519,15 @@ func buildResourceFilter(f ListFilter, includeCursor bool) ([]any, []string, err
 		raw, err := base64.RawURLEncoding.DecodeString(f.Cursor)
 		if err != nil {
 			return nil, nil, fmt.Errorf("invalid cursor")
+		}
+		if f.OrderByID {
+			id, parseErr := uuid.Parse(string(raw))
+			if parseErr != nil {
+				return nil, nil, fmt.Errorf("invalid cursor")
+			}
+			args = append(args, id.String())
+			where = append(where, fmt.Sprintf("r.id > $%d", len(args)))
+			return args, where, nil
 		}
 		sortID, err := strconv.ParseInt(string(raw), 10, 64)
 		if err != nil || sortID < 1 {

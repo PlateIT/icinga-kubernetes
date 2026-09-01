@@ -44,9 +44,10 @@ paths:
         - {$ref: '#/components/parameters/Namespace'}
         - {name: name, in: query, schema: {type: string, maxLength: 512}}
         - {name: namePrefix, in: query, description: Case-insensitive resource-name prefix; mutually exclusive with name, schema: {type: string, maxLength: 512}}
-        - {name: labels, in: query, description: Kubernetes label selector, schema: {type: string}}
+        - {name: labels, in: query, description: 'Exact Kubernetes label selector key=value[,key=value]', schema: {type: string, maxLength: 4096}}
         - {name: state, in: query, schema: {type: string, enum: [ok, warning, critical, unknown]}}
         - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 1000, default: 100}}
+        - {name: order, in: query, description: Stable globally comparable order for trusted multi-selector consumers, schema: {type: string, enum: [id]}}
         - {name: cursor, in: query, schema: {type: string, maxLength: 4096, pattern: '^[A-Za-z0-9_-]+$'}}
       responses:
         '200':
@@ -574,11 +575,11 @@ components:
       content: {application/json: {schema: {$ref: '#/components/schemas/PrometheusResponse'}}}
   parameters:
     RequiredCluster: {name: cluster, in: path, required: true, schema: {type: string}}
-    Cluster: {name: cluster, in: query, schema: {type: string}}
-    Group: {name: group, in: query, schema: {type: string}}
-    Version: {name: version, in: query, schema: {type: string}}
-    Kind: {name: kind, in: query, schema: {type: string}}
-    Namespace: {name: namespace, in: query, schema: {type: string}}
+    Cluster: {name: cluster, in: query, schema: {type: string, maxLength: 253, pattern: '^[A-Za-z0-9_.-]+$'}}
+    Group: {name: group, in: query, schema: {type: string, maxLength: 512}}
+    Version: {name: version, in: query, schema: {type: string, maxLength: 512}}
+    Kind: {name: kind, in: query, schema: {type: string, maxLength: 128}}
+    Namespace: {name: namespace, in: query, schema: {type: string, maxLength: 253}}
   schemas:
     PrometheusResponse:
       type: object

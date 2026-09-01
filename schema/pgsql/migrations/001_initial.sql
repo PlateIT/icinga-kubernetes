@@ -62,6 +62,15 @@ CREATE INDEX resource_list_idx ON resource
 CREATE INDEX resource_kind_list_idx ON resource
     (cluster_name, kind, sort_id)
     WHERE deleted_at IS NULL;
+CREATE INDEX resource_id_list_idx ON resource
+    (cluster_name, id)
+    WHERE deleted_at IS NULL;
+CREATE INDEX resource_kind_id_list_idx ON resource
+    (cluster_name, kind, id)
+    WHERE deleted_at IS NULL;
+CREATE INDEX resource_namespace_id_list_idx ON resource
+    (cluster_name, namespace, id)
+    WHERE deleted_at IS NULL;
 CREATE INDEX resource_type_inventory_idx ON resource
     (cluster_name, api_group, api_version, kind)
     WHERE deleted_at IS NULL;

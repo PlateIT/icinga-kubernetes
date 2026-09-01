@@ -139,6 +139,14 @@ func TestResourcesRejectsAmbiguousOrInvalidQuery(t *testing.T) {
 	server := &Server{Config: config.Config{ReaderToken: "reader"}}
 	for _, target := range []string{
 		"/api/v1/resources?name=exact&namePrefix=ex",
+		"/api/v1/resources?order=recent",
+		"/api/v1/resources?order=id&namePrefix=ex",
+		"/api/v1/resources?limit=invalid",
+		"/api/v1/resources?limit=1001",
+		"/api/v1/resources?state=healthy",
+		"/api/v1/resources?cluster=bad%2Fcluster",
+		"/api/v1/resources?kind=Pod&kind=Secret",
+		"/api/v1/resources?labels=" + strings.Repeat("x", 4097),
 		"/api/v1/resources?namePrefix=" + strings.Repeat("x", 513),
 		"/api/v1/resources?namePrefix=bad%00value",
 		"/api/v1/resources?cursor=not%2Bbase64url",
