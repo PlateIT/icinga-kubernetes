@@ -356,15 +356,40 @@ func applyResource(ctx context.Context, tx *sql.Tx, action, shard string, r mode
 		return nil
 	}
 	if action == "reconcile" {
-		_, err := tx.ExecContext(ctx, `WITH removed AS (UPDATE resource SET deleted_at=clock_timestamp(),changed_at=clock_timestamp()
-			WHERE cluster_name=$1 AND shard=$2 AND deleted_at IS NULL AND observed_at < $3 RETURNING id,cluster_name)
-			INSERT INTO change_log(resource_id,cluster_name,action) SELECT id,cluster_name,'delete' FROM removed`, r.Cluster, shard, r.ObservedAt)
+		_, err := tx.ExecContext(ctx, `WITH removed AS (
+			UPDATE resource SET deleted_at=clock_timestamp(),changed_at=clock_timestamp()
+			WHERE cluster_name=$1 AND shard=$2 AND deleted_at IS NULL AND observed_at < $3
+			RETURNING id,cluster_name,api_group,api_version,kind,namespace,name,labels,state,reason
+		), queued AS (
+			INSERT INTO notification_outbox(resource_id,cluster_name,api_group,api_version,kind,namespace,name,labels,state,reason,action)
+			SELECT id,cluster_name,api_group,api_version,kind,namespace,name,labels,state,reason,'delete'
+			FROM removed WHERE state <> 'ok'
+			RETURNING resource_id,cluster_name
+		), changed AS (
+			INSERT INTO change_log(resource_id,cluster_name,action)
+			SELECT id,cluster_name,'delete' FROM removed
+			RETURNING resource_id
+		)
+		SELECT (SELECT count(*) FROM queued)+(SELECT count(*) FROM changed)`, r.Cluster, shard, r.ObservedAt)
 		return err
 	}
 	labels, _ := json.Marshal(r.Labels)
 	annotations, _ := json.Marshal(r.Annotations)
 	conditions, _ := json.Marshal(r.Conditions)
 	summary, _ := json.Marshal(r.Summary)
+	var previousState, previousReason sql.NullString
+	var previousDeletedAt sql.NullTime
+	var relationsUnchanged bool
+	previousExists := true
+	if err := tx.QueryRowContext(ctx, `SELECT state,reason,deleted_at,
+		labels=$2::jsonb AND api_group=$3 AND api_version=$4 AND kind=$5 AND namespace=$6 AND name=$7
+		FROM resource WHERE id=$1 FOR UPDATE`, r.ID, labels, r.Group, r.Version, r.Kind, r.Namespace, r.Name).
+		Scan(&previousState, &previousReason, &previousDeletedAt, &relationsUnchanged); err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		previousExists = false
+	}
 	deletedAt := r.DeletedAt
 	if action == "delete" && deletedAt == nil {
 		now := time.Now().UTC()
@@ -392,7 +417,27 @@ func applyResource(ctx context.Context, tx *sql.Tx, action, shard string, r mode
 			}
 		}
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO change_log(resource_id,cluster_name,action) VALUES($1,$2,$3)`, r.ID, r.Cluster, action)
+	if _, err = tx.ExecContext(ctx, `INSERT INTO change_log(resource_id,cluster_name,action) VALUES($1,$2,$3)`, r.ID, r.Cluster, action); err != nil {
+		return err
+	}
+	shouldNotify := action == "delete" && previousExists && !previousDeletedAt.Valid && previousState.String != string(model.StateOK)
+	if action != "delete" {
+		if !previousExists {
+			shouldNotify = r.State != model.StateOK
+		} else if previousDeletedAt.Valid {
+			shouldNotify = r.State != model.StateOK
+		} else {
+			shouldNotify = previousState.String != string(r.State) ||
+				(r.State != model.StateOK && (previousReason.String != r.Reason || !relationsUnchanged))
+		}
+	}
+	if !shouldNotify {
+		return nil
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO notification_outbox(
+		resource_id,cluster_name,api_group,api_version,kind,namespace,name,labels,state,reason,action)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, r.ID, r.Cluster, r.Group, r.Version,
+		r.Kind, r.Namespace, r.Name, labels, r.State, r.Reason, action)
 	return err
 }
 
@@ -684,6 +729,12 @@ func (s Store) Status(ctx context.Context) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	var notificationPending, notificationFailures int64
+	var oldestNotification sql.NullTime
+	if err := s.DB.QueryRowContext(ctx, `SELECT count(*),min(created_at),count(*) FILTER (WHERE last_error IS NOT NULL)
+		FROM notification_outbox WHERE delivered_at IS NULL`).Scan(&notificationPending, &oldestNotification, &notificationFailures); err != nil {
+		return nil, err
+	}
 	var oldestValue, lastValue any
 	if oldest.Valid {
 		oldestValue = oldest.Time
@@ -691,7 +742,15 @@ func (s Store) Status(ctx context.Context) (map[string]any, error) {
 	if last.Valid {
 		lastValue = last.Time
 	}
-	return map[string]any{"pendingEvents": pending, "oldestPendingEvent": oldestValue, "lastAppliedAt": lastValue}, nil
+	var oldestNotificationValue any
+	if oldestNotification.Valid {
+		oldestNotificationValue = oldestNotification.Time
+	}
+	return map[string]any{
+		"pendingEvents": pending, "oldestPendingEvent": oldestValue, "lastAppliedAt": lastValue,
+		"pendingNotifications": notificationPending, "failedNotifications": notificationFailures,
+		"oldestPendingNotification": oldestNotificationValue,
+	}, nil
 }
 
 func (s Store) Cleanup(ctx context.Context, eventRetention, tombstoneRetention, historyRetention, federationCacheRetention time.Duration) error {
@@ -708,6 +767,7 @@ func (s Store) Cleanup(ctx context.Context, eventRetention, tombstoneRetention, 
 		{"events", `DELETE FROM resource WHERE lower(kind)='event' AND api_group IN ('core','events.k8s.io') AND observed_at < clock_timestamp()-$1::interval`, eventRetention},
 		{"tombstones", `DELETE FROM resource WHERE deleted_at < clock_timestamp()-$1::interval`, tombstoneRetention},
 		{"history", `DELETE FROM change_log WHERE changed_at < clock_timestamp()-$1::interval`, historyRetention},
+		{"delivered notifications", `DELETE FROM notification_outbox WHERE delivered_at IS NOT NULL AND delivered_at < clock_timestamp()-$1::interval`, historyRetention},
 		{"shard metadata", `DELETE FROM ingest_shard_head WHERE pending_events=0 AND last_applied_at < clock_timestamp()-$1::interval`, historyRetention},
 		{"inbox", `DELETE FROM ingest_event WHERE applied_at < clock_timestamp()-$1::interval`, historyRetention},
 		{"federation cache", `DELETE FROM federation_cache WHERE fetched_at < clock_timestamp()-$1::interval`, federationCacheRetention},

@@ -106,6 +106,32 @@ CREATE TABLE change_log (
 );
 CREATE INDEX change_log_retention_idx ON change_log (changed_at);
 
+CREATE TABLE notification_outbox (
+    id bigserial PRIMARY KEY,
+    resource_id uuid NOT NULL,
+    cluster_name text NOT NULL,
+    api_group text NOT NULL,
+    api_version text NOT NULL,
+    kind text NOT NULL,
+    namespace text NOT NULL DEFAULT '',
+    name text NOT NULL,
+    labels jsonb NOT NULL DEFAULT '{}',
+    state text NOT NULL CHECK (state IN ('ok', 'warning', 'critical', 'unknown')),
+    reason text NOT NULL DEFAULT '',
+    action text NOT NULL CHECK (action IN ('upsert', 'delete')),
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    available_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    claimed_by text,
+    claimed_until timestamptz,
+    attempts integer NOT NULL DEFAULT 0,
+    delivered_at timestamptz,
+    last_error text
+);
+CREATE INDEX notification_outbox_pending_idx ON notification_outbox (available_at, id)
+    WHERE delivered_at IS NULL;
+CREATE INDEX notification_outbox_resource_order_idx ON notification_outbox (resource_id, id)
+    WHERE delivered_at IS NULL;
+
 CREATE TABLE federation_cache (
     endpoint text NOT NULL,
     cache_key text NOT NULL,

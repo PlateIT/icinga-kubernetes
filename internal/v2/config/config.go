@@ -16,39 +16,44 @@ type FederationTarget struct {
 }
 
 type Config struct {
-	Role                string
-	Listen              string
-	ProbeListen         string
-	DatabaseURL         string
-	ClusterName         string
-	APIURL              string
-	CollectorToken      string
-	ReaderToken         string
-	FederationToken     string
-	AdminToken          string
-	CollectorTokenFile  string
-	ReaderTokenFile     string
-	FederationTokenFile string
-	AdminTokenFile      string
-	FederationTargets   []FederationTarget
-	SpoolPath           string
-	LeaseNamespace      string
-	Identity            string
-	AdapterFile         string
-	ResyncFile          string
-	MetricsURL          string
-	MetricsTokenFile    string
-	MetricsCAFile       string
-	MetricsInsecure     bool
-	EventRetention      time.Duration
-	TombstoneRetention  time.Duration
-	HistoryRetention    time.Duration
-	StaleAfter          time.Duration
-	UnavailableAfter    time.Duration
-	BatchSize           int
-	SpoolMaxBytes       int64
-	RatePerSecond       int
-	RateBurst           int
+	Role                      string
+	Listen                    string
+	ProbeListen               string
+	DatabaseURL               string
+	ClusterName               string
+	APIURL                    string
+	CollectorToken            string
+	ReaderToken               string
+	FederationToken           string
+	AdminToken                string
+	CollectorTokenFile        string
+	ReaderTokenFile           string
+	FederationTokenFile       string
+	AdminTokenFile            string
+	FederationTargets         []FederationTarget
+	SpoolPath                 string
+	LeaseNamespace            string
+	Identity                  string
+	AdapterFile               string
+	ResyncFile                string
+	MetricsURL                string
+	MetricsTokenFile          string
+	MetricsCAFile             string
+	MetricsInsecure           bool
+	NotificationsURL          string
+	NotificationsUsername     string
+	NotificationsPassword     string
+	NotificationsPasswordFile string
+	NotificationsCAFile       string
+	EventRetention            time.Duration
+	TombstoneRetention        time.Duration
+	HistoryRetention          time.Duration
+	StaleAfter                time.Duration
+	UnavailableAfter          time.Duration
+	BatchSize                 int
+	SpoolMaxBytes             int64
+	RatePerSecond             int
+	RateBurst                 int
 }
 
 var federationNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
@@ -58,38 +63,43 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	c := Config{
-		Role:                value("ICINGA_KUBERNETES_ROLE", "api"),
-		Listen:              value("ICINGA_KUBERNETES_LISTEN", ":8080"),
-		ProbeListen:         value("ICINGA_KUBERNETES_PROBE_LISTEN", ":8081"),
-		DatabaseURL:         os.Getenv("ICINGA_KUBERNETES_DATABASE_URL"),
-		ClusterName:         os.Getenv("ICINGA_KUBERNETES_CLUSTER_NAME"),
-		APIURL:              value("ICINGA_KUBERNETES_API_URL", "http://icinga-kubernetes-api:8080"),
-		CollectorToken:      os.Getenv("ICINGA_KUBERNETES_COLLECTOR_TOKEN"),
-		ReaderToken:         os.Getenv("ICINGA_KUBERNETES_READER_TOKEN"),
-		FederationToken:     os.Getenv("ICINGA_KUBERNETES_FEDERATION_TOKEN"),
-		AdminToken:          os.Getenv("ICINGA_KUBERNETES_ADMIN_TOKEN"),
-		CollectorTokenFile:  os.Getenv("ICINGA_KUBERNETES_COLLECTOR_TOKEN_FILE"),
-		ReaderTokenFile:     os.Getenv("ICINGA_KUBERNETES_READER_TOKEN_FILE"),
-		FederationTokenFile: os.Getenv("ICINGA_KUBERNETES_FEDERATION_TOKEN_FILE"),
-		AdminTokenFile:      os.Getenv("ICINGA_KUBERNETES_ADMIN_TOKEN_FILE"),
-		SpoolPath:           value("ICINGA_KUBERNETES_SPOOL_PATH", "/var/lib/icinga-kubernetes/spool"),
-		LeaseNamespace:      value("ICINGA_KUBERNETES_LEASE_NAMESPACE", value("POD_NAMESPACE", "icinga")),
-		Identity:            value("ICINGA_KUBERNETES_IDENTITY", value("HOSTNAME", "icinga-kubernetes")),
-		AdapterFile:         value("ICINGA_KUBERNETES_ADAPTER_FILE", "/etc/icinga-kubernetes/adapters.json"),
-		ResyncFile:          value("ICINGA_KUBERNETES_RESYNC_FILE", "/etc/icinga-kubernetes/resync.json"),
-		MetricsURL:          strings.TrimRight(os.Getenv("ICINGA_KUBERNETES_METRICS_URL"), "/"),
-		MetricsTokenFile:    os.Getenv("ICINGA_KUBERNETES_METRICS_TOKEN_FILE"),
-		MetricsCAFile:       os.Getenv("ICINGA_KUBERNETES_METRICS_CA_FILE"),
-		MetricsInsecure:     boolean("ICINGA_KUBERNETES_METRICS_INSECURE", false),
-		EventRetention:      duration("ICINGA_KUBERNETES_EVENT_RETENTION", 7*24*time.Hour),
-		TombstoneRetention:  duration("ICINGA_KUBERNETES_TOMBSTONE_RETENTION", 7*24*time.Hour),
-		HistoryRetention:    duration("ICINGA_KUBERNETES_HISTORY_RETENTION", time.Hour),
-		StaleAfter:          duration("ICINGA_KUBERNETES_STALE_AFTER", 30*time.Second),
-		UnavailableAfter:    duration("ICINGA_KUBERNETES_UNAVAILABLE_AFTER", 2*time.Minute),
-		BatchSize:           integer("ICINGA_KUBERNETES_BATCH_SIZE", 250),
-		SpoolMaxBytes:       integer64("ICINGA_KUBERNETES_SPOOL_MAX_BYTES", 4<<30),
-		RatePerSecond:       integer("ICINGA_KUBERNETES_RATE_PER_SECOND", 200),
-		RateBurst:           integer("ICINGA_KUBERNETES_RATE_BURST", 400),
+		Role:                      value("ICINGA_KUBERNETES_ROLE", "api"),
+		Listen:                    value("ICINGA_KUBERNETES_LISTEN", ":8080"),
+		ProbeListen:               value("ICINGA_KUBERNETES_PROBE_LISTEN", ":8081"),
+		DatabaseURL:               os.Getenv("ICINGA_KUBERNETES_DATABASE_URL"),
+		ClusterName:               os.Getenv("ICINGA_KUBERNETES_CLUSTER_NAME"),
+		APIURL:                    value("ICINGA_KUBERNETES_API_URL", "http://icinga-kubernetes-api:8080"),
+		CollectorToken:            os.Getenv("ICINGA_KUBERNETES_COLLECTOR_TOKEN"),
+		ReaderToken:               os.Getenv("ICINGA_KUBERNETES_READER_TOKEN"),
+		FederationToken:           os.Getenv("ICINGA_KUBERNETES_FEDERATION_TOKEN"),
+		AdminToken:                os.Getenv("ICINGA_KUBERNETES_ADMIN_TOKEN"),
+		CollectorTokenFile:        os.Getenv("ICINGA_KUBERNETES_COLLECTOR_TOKEN_FILE"),
+		ReaderTokenFile:           os.Getenv("ICINGA_KUBERNETES_READER_TOKEN_FILE"),
+		FederationTokenFile:       os.Getenv("ICINGA_KUBERNETES_FEDERATION_TOKEN_FILE"),
+		AdminTokenFile:            os.Getenv("ICINGA_KUBERNETES_ADMIN_TOKEN_FILE"),
+		SpoolPath:                 value("ICINGA_KUBERNETES_SPOOL_PATH", "/var/lib/icinga-kubernetes/spool"),
+		LeaseNamespace:            value("ICINGA_KUBERNETES_LEASE_NAMESPACE", value("POD_NAMESPACE", "icinga")),
+		Identity:                  value("ICINGA_KUBERNETES_IDENTITY", value("HOSTNAME", "icinga-kubernetes")),
+		AdapterFile:               value("ICINGA_KUBERNETES_ADAPTER_FILE", "/etc/icinga-kubernetes/adapters.json"),
+		ResyncFile:                value("ICINGA_KUBERNETES_RESYNC_FILE", "/etc/icinga-kubernetes/resync.json"),
+		MetricsURL:                strings.TrimRight(os.Getenv("ICINGA_KUBERNETES_METRICS_URL"), "/"),
+		MetricsTokenFile:          os.Getenv("ICINGA_KUBERNETES_METRICS_TOKEN_FILE"),
+		MetricsCAFile:             os.Getenv("ICINGA_KUBERNETES_METRICS_CA_FILE"),
+		MetricsInsecure:           boolean("ICINGA_KUBERNETES_METRICS_INSECURE", false),
+		NotificationsURL:          strings.TrimRight(os.Getenv("ICINGA_KUBERNETES_NOTIFICATIONS_URL"), "/"),
+		NotificationsUsername:     os.Getenv("ICINGA_KUBERNETES_NOTIFICATIONS_USERNAME"),
+		NotificationsPassword:     os.Getenv("ICINGA_KUBERNETES_NOTIFICATIONS_PASSWORD"),
+		NotificationsPasswordFile: os.Getenv("ICINGA_KUBERNETES_NOTIFICATIONS_PASSWORD_FILE"),
+		NotificationsCAFile:       os.Getenv("ICINGA_KUBERNETES_NOTIFICATIONS_CA_FILE"),
+		EventRetention:            duration("ICINGA_KUBERNETES_EVENT_RETENTION", 7*24*time.Hour),
+		TombstoneRetention:        duration("ICINGA_KUBERNETES_TOMBSTONE_RETENTION", 7*24*time.Hour),
+		HistoryRetention:          duration("ICINGA_KUBERNETES_HISTORY_RETENTION", time.Hour),
+		StaleAfter:                duration("ICINGA_KUBERNETES_STALE_AFTER", 30*time.Second),
+		UnavailableAfter:          duration("ICINGA_KUBERNETES_UNAVAILABLE_AFTER", 2*time.Minute),
+		BatchSize:                 integer("ICINGA_KUBERNETES_BATCH_SIZE", 250),
+		SpoolMaxBytes:             integer64("ICINGA_KUBERNETES_SPOOL_MAX_BYTES", 4<<30),
+		RatePerSecond:             integer("ICINGA_KUBERNETES_RATE_PER_SECOND", 200),
+		RateBurst:                 integer("ICINGA_KUBERNETES_RATE_BURST", 400),
 	}
 
 	var err error
@@ -120,6 +130,22 @@ func Load() (Config, error) {
 		if err := validateHTTPBaseURL(c.MetricsURL); err != nil {
 			return Config{}, fmt.Errorf("ICINGA_KUBERNETES_METRICS_URL: %w", err)
 		}
+	}
+	if c.NotificationsURL != "" {
+		if c.Role != "worker" {
+			return Config{}, fmt.Errorf("ICINGA_KUBERNETES_NOTIFICATIONS_URL is only valid for the worker role")
+		}
+		if err := validateHTTPBaseURL(c.NotificationsURL); err != nil {
+			return Config{}, fmt.Errorf("ICINGA_KUBERNETES_NOTIFICATIONS_URL: %w", err)
+		}
+		if c.NotificationsUsername == "" {
+			return Config{}, fmt.Errorf("ICINGA_KUBERNETES_NOTIFICATIONS_USERNAME is required when notifications are enabled")
+		}
+		if (c.NotificationsPassword == "") == (c.NotificationsPasswordFile == "") {
+			return Config{}, fmt.Errorf("exactly one of ICINGA_KUBERNETES_NOTIFICATIONS_PASSWORD and ICINGA_KUBERNETES_NOTIFICATIONS_PASSWORD_FILE is required")
+		}
+	} else if c.NotificationsUsername != "" || c.NotificationsPassword != "" || c.NotificationsPasswordFile != "" || c.NotificationsCAFile != "" {
+		return Config{}, fmt.Errorf("ICINGA_KUBERNETES_NOTIFICATIONS_URL is required when notifications options are set")
 	}
 	if c.Role != "collector" && c.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("ICINGA_KUBERNETES_DATABASE_URL is required for role %s", c.Role)

@@ -15,7 +15,7 @@ func TestInitialMigrationIsAtomicPortableGreenfieldSchema(t *testing.T) {
 	}
 	for _, table := range []string{
 		"schema_migration", "ingest_event", "ingest_shard_head", "resource", "resource_owner",
-		"change_log", "federation_cache", "business_process",
+		"change_log", "notification_outbox", "federation_cache", "business_process",
 	} {
 		pattern := regexp.MustCompile(`(?im)^CREATE TABLE ` + regexp.QuoteMeta(table) + `\s*\(`)
 		if !pattern.MatchString(schema) {
@@ -29,6 +29,8 @@ func TestInitialMigrationIsAtomicPortableGreenfieldSchema(t *testing.T) {
 		`(?is)CREATE INDEX ingest_event_shard_order_idx\s+ON ingest_event\s*\(cluster_name,\s*shard,\s*received_at,\s*event_id\).*?WHERE applied_at IS NULL`,
 		`(?is)CREATE INDEX resource_list_idx\s+ON resource\s*\(cluster_name,\s*sort_id\).*?WHERE deleted_at IS NULL`,
 		`(?is)CREATE INDEX resource_kind_list_idx\s+ON resource\s*\(cluster_name,\s*kind,\s*sort_id\).*?WHERE deleted_at IS NULL`,
+		`(?is)CREATE INDEX notification_outbox_pending_idx\s+ON notification_outbox\s*\(available_at,\s*id\).*?WHERE delivered_at IS NULL`,
+		`(?is)CREATE INDEX notification_outbox_resource_order_idx\s+ON notification_outbox\s*\(resource_id,\s*id\).*?WHERE delivered_at IS NULL`,
 	} {
 		if !regexp.MustCompile(required).MatchString(schema) {
 			t.Errorf("initial schema is missing a required ordered pending-inbox index: %s", required)

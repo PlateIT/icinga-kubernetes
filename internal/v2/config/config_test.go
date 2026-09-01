@@ -182,3 +182,38 @@ func TestLoadDoesNotInferMetricsCredentials(t *testing.T) {
 		t.Fatalf("custom metrics URL inherited token file %q", cfg.MetricsTokenFile)
 	}
 }
+
+func TestLoadValidatesNotificationsConfiguration(t *testing.T) {
+	t.Setenv("ICINGA_KUBERNETES_ROLE", "worker")
+	t.Setenv("ICINGA_KUBERNETES_CLUSTER_NAME", "test")
+	t.Setenv("ICINGA_KUBERNETES_DATABASE_URL", "postgres://unused")
+	t.Setenv("ICINGA_KUBERNETES_NOTIFICATIONS_URL", "https://notifications.example.test")
+	t.Setenv("ICINGA_KUBERNETES_NOTIFICATIONS_USERNAME", "icinga-kubernetes")
+	t.Setenv("ICINGA_KUBERNETES_NOTIFICATIONS_PASSWORD", "secret")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.NotificationsURL != "https://notifications.example.test" || cfg.NotificationsUsername != "icinga-kubernetes" {
+		t.Fatalf("notifications configuration not loaded: %#v", cfg)
+	}
+
+	for name, mutate := range map[string]func(){
+		"non-worker role": func() { t.Setenv("ICINGA_KUBERNETES_ROLE", "api"); configureAPICredentials(t) },
+		"unsafe URL": func() {
+			t.Setenv("ICINGA_KUBERNETES_NOTIFICATIONS_URL", "https://user:secret@notifications.example.test")
+		},
+		"missing user": func() { t.Setenv("ICINGA_KUBERNETES_NOTIFICATIONS_USERNAME", "") },
+		"two passwords": func() {
+			t.Setenv("ICINGA_KUBERNETES_NOTIFICATIONS_PASSWORD_FILE", filepath.Join(t.TempDir(), "password"))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mutate()
+			if _, err := Load(); err == nil {
+				t.Fatal("invalid notifications configuration was accepted")
+			}
+		})
+	}
+}

@@ -69,6 +69,7 @@ func TestPostgreSQLLifecycle(t *testing.T) {
 			arg   string
 		}{
 			{`DELETE FROM change_log WHERE cluster_name=$1`, cluster},
+			{`DELETE FROM notification_outbox WHERE cluster_name=$1`, cluster},
 			{`DELETE FROM ingest_shard_head WHERE cluster_name=$1`, cluster},
 			{`DELETE FROM ingest_event WHERE cluster_name=$1`, cluster},
 			{`DELETE FROM resource WHERE cluster_name=$1`, cluster},
@@ -135,11 +136,91 @@ func TestPostgreSQLLifecycle(t *testing.T) {
 	if err != nil || len(page.Items) != 1 || page.Items[0].ID != id {
 		t.Fatalf("unexpected page %#v err=%v", page, err)
 	}
+	assertOutbox := func(want int, state, action string) {
+		t.Helper()
+		var count int
+		query := `SELECT count(*) FROM notification_outbox WHERE cluster_name=$1 AND resource_id=$2`
+		args := []any{cluster, id}
+		if state != "" {
+			query += ` AND state=$3 AND action=$4`
+			args = append(args, state, action)
+		}
+		if scanErr := db.QueryRowContext(ctx, query, args...).Scan(&count); scanErr != nil || count != want {
+			t.Fatalf("outbox count=%d want=%d state=%s action=%s err=%v", count, want, state, action, scanErr)
+		}
+	}
+	assertOutbox(0, "", "")
+
+	resource.State = model.StateCritical
+	resource.Reason = "Unavailable replicas"
+	resource.ResourceVersion = "2"
+	if err := s.Enqueue(ctx, model.IngestBatch{Cluster: cluster, Shard: batch.Shard, Events: []model.IngestEvent{{EventID: uuid.NewString(), Action: "upsert", Resource: resource}}}); err != nil {
+		t.Fatal(err)
+	}
+	if processed, applyErr := s.ApplyShard(ctx, "integration", 1); applyErr != nil || processed != 1 {
+		t.Fatalf("critical apply=%v err=%v", processed, applyErr)
+	}
+	assertOutbox(1, "critical", "upsert")
+
+	resource.ResourceVersion = "3"
+	if err := s.Enqueue(ctx, model.IngestBatch{Cluster: cluster, Shard: batch.Shard, Events: []model.IngestEvent{{EventID: uuid.NewString(), Action: "upsert", Resource: resource}}}); err != nil {
+		t.Fatal(err)
+	}
+	if processed, applyErr := s.ApplyShard(ctx, "integration", 1); applyErr != nil || processed != 1 {
+		t.Fatalf("unchanged critical apply=%v err=%v", processed, applyErr)
+	}
+	assertOutbox(1, "", "")
+
+	resource.State = model.StateOK
+	resource.Reason = ""
+	resource.ResourceVersion = "4"
+	if err := s.Enqueue(ctx, model.IngestBatch{Cluster: cluster, Shard: batch.Shard, Events: []model.IngestEvent{{EventID: uuid.NewString(), Action: "upsert", Resource: resource}}}); err != nil {
+		t.Fatal(err)
+	}
+	if processed, applyErr := s.ApplyShard(ctx, "integration", 1); applyErr != nil || processed != 1 {
+		t.Fatalf("recovery apply=%v err=%v", processed, applyErr)
+	}
+	assertOutbox(1, "ok", "upsert")
+	assertOutbox(2, "", "")
+
+	for _, deleteCase := range []struct {
+		name  string
+		state model.State
+		want  int
+	}{
+		{name: "healthy-delete", state: model.StateOK, want: 0},
+		{name: "critical-delete", state: model.StateCritical, want: 2},
+	} {
+		candidate := resource
+		candidate.UID = uuid.NewString()
+		candidate.ID = model.StableID(cluster, candidate.UID)
+		candidate.Name = deleteCase.name
+		candidate.State = deleteCase.state
+		candidate.Reason = ""
+		candidate.ResourceVersion = "1"
+		if err := s.Enqueue(ctx, model.IngestBatch{Cluster: cluster, Shard: batch.Shard, Events: []model.IngestEvent{{EventID: uuid.NewString(), Action: "upsert", Resource: candidate}}}); err != nil {
+			t.Fatal(err)
+		}
+		if processed, applyErr := s.ApplyShard(ctx, "integration", 1); applyErr != nil || processed != 1 {
+			t.Fatalf("%s create=%v err=%v", deleteCase.name, processed, applyErr)
+		}
+		candidate.ResourceVersion = "2"
+		if err := s.Enqueue(ctx, model.IngestBatch{Cluster: cluster, Shard: batch.Shard, Events: []model.IngestEvent{{EventID: uuid.NewString(), Action: "delete", Resource: candidate}}}); err != nil {
+			t.Fatal(err)
+		}
+		if processed, applyErr := s.ApplyShard(ctx, "integration", 1); applyErr != nil || processed != 1 {
+			t.Fatalf("%s delete=%v err=%v", deleteCase.name, processed, applyErr)
+		}
+		var count int
+		if scanErr := db.QueryRowContext(ctx, `SELECT count(*) FROM notification_outbox WHERE resource_id=$1`, candidate.ID).Scan(&count); scanErr != nil || count != deleteCase.want {
+			t.Fatalf("%s outbox count=%d want=%d err=%v", deleteCase.name, count, deleteCase.want, scanErr)
+		}
+	}
 
 	// A CRD/operator version switch keeps the stable object ID but refreshes
 	// the served GVK projection.
 	resource.Version = "v2"
-	resource.ResourceVersion = "2"
+	resource.ResourceVersion = "5"
 	if err := s.Enqueue(ctx, model.IngestBatch{Cluster: cluster, Shard: batch.Shard, Events: []model.IngestEvent{{EventID: uuid.NewString(), Action: "upsert", Resource: resource}}}); err != nil {
 		t.Fatal(err)
 	}

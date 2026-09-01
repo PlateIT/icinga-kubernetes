@@ -1026,6 +1026,17 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	} else {
 		fmt.Fprintln(w, "# TYPE icinga_kubernetes_ingest_oldest_seconds gauge\nicinga_kubernetes_ingest_oldest_seconds 0")
 	}
+	if pending, ok := status["pendingNotifications"].(int64); ok {
+		fmt.Fprintf(w, "# HELP icinga_kubernetes_notifications_pending Notification events awaiting acknowledgement.\n# TYPE icinga_kubernetes_notifications_pending gauge\nicinga_kubernetes_notifications_pending %d\n", pending)
+	}
+	if failed, ok := status["failedNotifications"].(int64); ok {
+		fmt.Fprintf(w, "# HELP icinga_kubernetes_notifications_failed Notification events awaiting retry after a failed delivery.\n# TYPE icinga_kubernetes_notifications_failed gauge\nicinga_kubernetes_notifications_failed %d\n", failed)
+	}
+	if oldest, ok := status["oldestPendingNotification"].(time.Time); ok {
+		fmt.Fprintf(w, "# HELP icinga_kubernetes_notifications_oldest_seconds Age of the oldest undelivered notification event.\n# TYPE icinga_kubernetes_notifications_oldest_seconds gauge\nicinga_kubernetes_notifications_oldest_seconds %.3f\n", time.Since(oldest).Seconds())
+	} else {
+		fmt.Fprintln(w, "# HELP icinga_kubernetes_notifications_oldest_seconds Age of the oldest undelivered notification event.\n# TYPE icinga_kubernetes_notifications_oldest_seconds gauge\nicinga_kubernetes_notifications_oldest_seconds 0")
+	}
 }
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	v, err := s.Store.Status(r.Context())

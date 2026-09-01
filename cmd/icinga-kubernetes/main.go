@@ -17,6 +17,7 @@ import (
 	"github.com/icinga/icinga-kubernetes/internal/v2/api"
 	"github.com/icinga/icinga-kubernetes/internal/v2/collector"
 	"github.com/icinga/icinga-kubernetes/internal/v2/config"
+	"github.com/icinga/icinga-kubernetes/internal/v2/notifier"
 	"github.com/icinga/icinga-kubernetes/internal/v2/operational"
 	"github.com/icinga/icinga-kubernetes/internal/v2/store"
 	"github.com/icinga/icinga-kubernetes/internal/v2/telemetry"
@@ -88,11 +89,29 @@ func run() error {
 		host, _ := os.Hostname()
 		metrics := operational.New(cfg.Role)
 		return operational.Run(ctx, cfg.ProbeListen, metrics, func(roleCtx context.Context) error {
-			return worker.Run(roleCtx, cfg, store.Store{DB: db}, host, metrics)
+			if cfg.NotificationsURL == "" {
+				return worker.Run(roleCtx, cfg, store.Store{DB: db}, host, metrics)
+			}
+			return runWorkerAndNotifier(roleCtx, cfg, db, host, metrics)
 		})
 	default:
 		return fmt.Errorf("unsupported role %s", cfg.Role)
 	}
+}
+
+func runWorkerAndNotifier(ctx context.Context, cfg config.Config, db *sql.DB, identity string, metrics *operational.Metrics) error {
+	roleCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	errorsCh := make(chan error, 2)
+	go func() { errorsCh <- worker.Run(roleCtx, cfg, store.Store{DB: db}, identity, metrics) }()
+	go func() { errorsCh <- notifier.Run(roleCtx, cfg, db, identity) }()
+	first := <-errorsCh
+	cancel()
+	second := <-errorsCh
+	if (first == nil || errors.Is(first, context.Canceled)) && second != nil && !errors.Is(second, context.Canceled) {
+		return second
+	}
+	return first
 }
 
 func serve(ctx context.Context, cfg config.Config, db *sql.DB) error {
