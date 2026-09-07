@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	icingaconfig "github.com/icinga/icinga-go-library/config"
 	"github.com/icinga/icinga-go-library/notifications/event"
 	"github.com/icinga/icinga-go-library/notifications/source"
@@ -161,8 +162,11 @@ func makeEvent(record Record, webURL string) *event.Event {
 		message = "Kubernetes resource state is " + record.State
 	}
 	query := url.Values{"id": {record.ResourceID}, "cluster": {record.Cluster}}
+	// Retries must keep the same UUID for server-side deduplication. Scope the
+	// outbox sequence by cluster and resource to distinguish independent sources.
+	identity, _ := json.Marshal([]any{"icinga-kubernetes", record.Cluster, record.ResourceID, record.ID})
 	ev := &event.Event{
-		ID: fmt.Sprintf("icinga-kubernetes-%d", record.ID), Name: displayName,
+		ID: types.MakeUUID(uuid.NewSHA1(uuid.NameSpaceOID, identity)), Name: displayName,
 		URL:      strings.TrimRight(webURL, "/") + "/kubernetes/resources/show?" + query.Encode(),
 		Tags:     map[string]string{"cluster": record.Cluster, "resource_id": record.ResourceID},
 		Severity: severity(record.State), Message: message,

@@ -1,11 +1,11 @@
 module github.com/icinga/icinga-kubernetes
 
-go 1.25.0
+go 1.27
 
 require (
 	github.com/getkin/kin-openapi v0.146.0
 	github.com/google/uuid v1.6.0
-	github.com/icinga/icinga-go-library v0.9.1-0.20260825132314-f6c83f5683e0
+	github.com/icinga/icinga-go-library v0.9.1-0.20260904123307-5937dfc8fd5b
 	github.com/lib/pq v1.12.3
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.71.0
 	go.opentelemetry.io/otel v1.46.0
