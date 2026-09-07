@@ -41,6 +41,7 @@ type Config struct {
 	MetricsCAFile             string
 	MetricsInsecure           bool
 	NotificationsURL          string
+	NotificationsWebURL       string
 	NotificationsUsername     string
 	NotificationsPassword     string
 	NotificationsPasswordFile string
@@ -87,6 +88,7 @@ func Load() (Config, error) {
 		MetricsCAFile:             os.Getenv("ICINGA_KUBERNETES_METRICS_CA_FILE"),
 		MetricsInsecure:           boolean("ICINGA_KUBERNETES_METRICS_INSECURE", false),
 		NotificationsURL:          strings.TrimRight(os.Getenv("ICINGA_KUBERNETES_NOTIFICATIONS_URL"), "/"),
+		NotificationsWebURL:       strings.TrimRight(os.Getenv("ICINGA_KUBERNETES_NOTIFICATIONS_WEB_URL"), "/"),
 		NotificationsUsername:     os.Getenv("ICINGA_KUBERNETES_NOTIFICATIONS_USERNAME"),
 		NotificationsPassword:     os.Getenv("ICINGA_KUBERNETES_NOTIFICATIONS_PASSWORD"),
 		NotificationsPasswordFile: os.Getenv("ICINGA_KUBERNETES_NOTIFICATIONS_PASSWORD_FILE"),
@@ -132,6 +134,12 @@ func Load() (Config, error) {
 		}
 	}
 	if c.NotificationsURL != "" {
+		if c.NotificationsWebURL == "" {
+			return Config{}, fmt.Errorf("ICINGA_KUBERNETES_NOTIFICATIONS_WEB_URL is required when notifications are enabled")
+		}
+		if err := validateHTTPBaseURL(c.NotificationsWebURL); err != nil {
+			return Config{}, fmt.Errorf("ICINGA_KUBERNETES_NOTIFICATIONS_WEB_URL: %w", err)
+		}
 		if c.Role != "worker" {
 			return Config{}, fmt.Errorf("ICINGA_KUBERNETES_NOTIFICATIONS_URL is only valid for the worker role")
 		}

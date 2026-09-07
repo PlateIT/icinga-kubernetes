@@ -128,7 +128,7 @@ func Run(ctx context.Context, cfg config.Config, db *sql.DB, identity string) er
 			timer.Reset(250 * time.Millisecond)
 			continue
 		}
-		ev := makeEvent(record)
+		ev := makeEvent(record, cfg.NotificationsWebURL)
 		sendCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		_, sendErr := client.ProcessEvent(sendCtx, ev, false)
 		cancel()
@@ -150,7 +150,7 @@ func Run(ctx context.Context, cfg config.Config, db *sql.DB, identity string) er
 	}
 }
 
-func makeEvent(record Record) *event.Event {
+func makeEvent(record Record, webURL string) *event.Event {
 	displayName := record.Name
 	if record.Namespace != "" {
 		displayName = record.Namespace + "/" + displayName
@@ -163,7 +163,7 @@ func makeEvent(record Record) *event.Event {
 	query := url.Values{"id": {record.ResourceID}, "cluster": {record.Cluster}}
 	ev := &event.Event{
 		ID: fmt.Sprintf("icinga-kubernetes-%d", record.ID), Name: displayName,
-		URL:      "/kubernetes/resources/show?" + query.Encode(),
+		URL:      strings.TrimRight(webURL, "/") + "/kubernetes/resources/show?" + query.Encode(),
 		Tags:     map[string]string{"cluster": record.Cluster, "resource_id": record.ResourceID},
 		Severity: severity(record.State), Message: message,
 		Incident: types.MakeBool(true),

@@ -12,7 +12,7 @@ func TestMakeEventMapsStateAndIdentity(t *testing.T) {
 		Labels: map[string]string{"app": "checkout"}, State: "critical", Reason: "Unavailable replicas",
 		Action: "upsert",
 	}
-	event := makeEvent(record)
+	event := makeEvent(record, "https://icinga.example.test/")
 	if err := event.Validate(); err != nil {
 		t.Fatalf("generated event invalid: %v", err)
 	}
@@ -22,7 +22,7 @@ func TestMakeEventMapsStateAndIdentity(t *testing.T) {
 	if event.Tags["cluster"] != "campus" || event.Tags["resource_id"] != record.ResourceID {
 		t.Fatalf("unstable object tags: %#v", event.Tags)
 	}
-	if !strings.Contains(event.URL, "id="+record.ResourceID) || !strings.Contains(event.URL, "cluster=campus") {
+	if !strings.HasPrefix(event.URL, "https://icinga.example.test/kubernetes/resources/show?") || !strings.Contains(event.URL, "id="+record.ResourceID) || !strings.Contains(event.URL, "cluster=campus") {
 		t.Fatalf("resource URL is incomplete: %s", event.URL)
 	}
 	kubernetes, ok := event.Relations["kubernetes"].(map[string]any)
@@ -36,7 +36,7 @@ func TestMakeEventClosesRecoveredAndDeletedResources(t *testing.T) {
 		{ID: 1, ResourceID: "id", Cluster: "cluster", Kind: "Pod", Name: "pod", State: "ok", Action: "upsert"},
 		{ID: 2, ResourceID: "id", Cluster: "cluster", Kind: "Pod", Name: "pod", State: "critical", Action: "delete"},
 	} {
-		event := makeEvent(record)
+		event := makeEvent(record, "https://icinga.example.test")
 		if err := event.Validate(); err != nil {
 			t.Fatalf("generated close event invalid: %v", err)
 		}

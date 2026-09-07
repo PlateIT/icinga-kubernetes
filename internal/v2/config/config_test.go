@@ -188,6 +188,7 @@ func TestLoadValidatesNotificationsConfiguration(t *testing.T) {
 	t.Setenv("ICINGA_KUBERNETES_CLUSTER_NAME", "test")
 	t.Setenv("ICINGA_KUBERNETES_DATABASE_URL", "postgres://unused")
 	t.Setenv("ICINGA_KUBERNETES_NOTIFICATIONS_URL", "https://notifications.example.test")
+	t.Setenv("ICINGA_KUBERNETES_NOTIFICATIONS_WEB_URL", "https://icinga.example.test")
 	t.Setenv("ICINGA_KUBERNETES_NOTIFICATIONS_USERNAME", "icinga-kubernetes")
 	t.Setenv("ICINGA_KUBERNETES_NOTIFICATIONS_PASSWORD", "secret")
 
@@ -200,7 +201,9 @@ func TestLoadValidatesNotificationsConfiguration(t *testing.T) {
 	}
 
 	for name, mutate := range map[string]func(){
-		"non-worker role": func() { t.Setenv("ICINGA_KUBERNETES_ROLE", "api"); configureAPICredentials(t) },
+		"missing web URL":  func() { t.Setenv("ICINGA_KUBERNETES_NOTIFICATIONS_WEB_URL", "") },
+		"relative web URL": func() { t.Setenv("ICINGA_KUBERNETES_NOTIFICATIONS_WEB_URL", "/icingaweb2") },
+		"non-worker role":  func() { t.Setenv("ICINGA_KUBERNETES_ROLE", "api"); configureAPICredentials(t) },
 		"unsafe URL": func() {
 			t.Setenv("ICINGA_KUBERNETES_NOTIFICATIONS_URL", "https://user:secret@notifications.example.test")
 		},
