@@ -594,7 +594,9 @@ func (c *Collector) watch(ctx context.Context, target shard) {
 		continueToken := ""
 		listFailed := false
 		for {
-			list, err := resource.List(ctx, metav1.ListOptions{Limit: 500, ResourceVersion: rv, Continue: continueToken})
+			// Continuation tokens carry the snapshot version. Sending an explicit
+			// resourceVersion with a token is rejected by the Kubernetes API.
+			list, err := resource.List(ctx, metav1.ListOptions{Limit: 500, Continue: continueToken})
 			if err != nil {
 				slog.Warn("resource list failed", "gvr", gvr.String(), "error", err)
 				listFailed = true
@@ -616,9 +618,8 @@ func (c *Collector) watch(ctx context.Context, target shard) {
 			}
 		}
 		if listFailed {
-			// A resource version can expire while a replica is not the leader or
-			// disconnected. Start the next attempt from a fresh consistent list
-			// instead of retrying a permanently invalid version forever.
+			// A continuation token can expire while listing. Restart the full
+			// snapshot before emitting a reconcile marker or opening a watch.
 			rv = ""
 			wait(ctx, time.Second)
 			continue
