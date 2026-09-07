@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -50,20 +51,33 @@ func TestLoadResyncRequestsIsStrictAndBounded(t *testing.T) {
 	}
 }
 
+func TestTargetedResyncWaitsForCompleteDiscoveryAndPermissions(t *testing.T) {
+	if canApplyResync(errors.New("partial discovery"), true) {
+		t.Fatal("resync accepted during partial API discovery")
+	}
+	if canApplyResync(nil, false) {
+		t.Fatal("resync accepted during incomplete permission discovery")
+	}
+	if !canApplyResync(nil, true) {
+		t.Fatal("resync rejected after complete discovery and permission evaluation")
+	}
+}
+
 func TestTargetedResyncReplaysMarkerAfterNetworkRecovery(t *testing.T) {
 	pods := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
 	cancelled := 0
 	metrics := operational.New("collector")
 	collector := &Collector{
 		metrics: metrics,
-		shards: map[schema.GroupVersionResource]context.CancelFunc{
-			pods: func() { cancelled++ },
+		shards: map[leaseShard]context.CancelFunc{
+			{GVR: pods, Partition: 3}: func() { cancelled++ },
 		},
+		shardStates:   map[leaseShard]*shardState{},
 		appliedResync: map[string]schema.GroupVersionResource{},
 	}
 	if err := collector.applyResyncRequests(
 		[]resyncRequest{{ID: "network-incident-1", Version: "v1", Resource: "pods"}},
-		map[schema.GroupVersionResource]bool{pods: true},
+		map[schema.GroupVersionResource]map[string]bool{pods: {"team-a": true}},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -147,27 +161,31 @@ func TestTargetedResyncRestartsOnlyWantedGVRAndIsIdempotent(t *testing.T) {
 	metrics := operational.New("collector")
 	collector := &Collector{
 		metrics: metrics,
-		shards: map[schema.GroupVersionResource]context.CancelFunc{
-			pods:        func() { podsCancelled++ },
-			deployments: func() { deploymentsCancelled++ },
+		shards: map[leaseShard]context.CancelFunc{
+			{GVR: pods, Partition: 0}:        func() { podsCancelled++ },
+			{GVR: pods, Partition: 1}:        func() { podsCancelled++ },
+			{GVR: deployments, Partition: 0}: func() { deploymentsCancelled++ },
 		},
+		shardStates:   map[leaseShard]*shardState{},
 		appliedResync: map[string]schema.GroupVersionResource{},
 	}
 	requests := []resyncRequest{{ID: "pods-1", Version: "v1", Resource: "pods"}}
-	wanted := map[schema.GroupVersionResource]bool{pods: true, deployments: true}
+	wanted := map[schema.GroupVersionResource]map[string]bool{pods: {"team-a": true}, deployments: {"team-a": true}}
 	if err := collector.applyResyncRequests(requests, wanted); err != nil {
 		t.Fatal(err)
 	}
 	if err := collector.applyResyncRequests(requests, wanted); err != nil {
 		t.Fatal(err)
 	}
-	if podsCancelled != 1 || deploymentsCancelled != 0 {
+	if podsCancelled != 2 || deploymentsCancelled != 0 {
 		t.Fatalf("pod cancellations=%d deployment cancellations=%d", podsCancelled, deploymentsCancelled)
 	}
-	if _, running := collector.shards[pods]; running {
-		t.Fatal("targeted shard was not removed for restart")
+	for target := range collector.shards {
+		if target.GVR == pods {
+			t.Fatal("targeted shard was not removed for restart")
+		}
 	}
-	if _, running := collector.shards[deployments]; !running {
+	if _, running := collector.shards[leaseShard{GVR: deployments, Partition: 0}]; !running {
 		t.Fatal("unrelated shard was removed")
 	}
 

@@ -469,4 +469,49 @@ func TestPostgreSQLLifecycle(t *testing.T) {
 		assertCount(`SELECT count(*) FROM federation_cache WHERE endpoint=$1 AND cache_key='expired'`, 0, cacheEndpoint)
 		assertCount(`SELECT count(*) FROM federation_cache WHERE endpoint=$1 AND cache_key='request'`, 1, cacheEndpoint)
 	})
+
+	t.Run("stale leader replay cannot resurrect a reconciled resource", func(t *testing.T) {
+		shard := "core/v1/pods@failover"
+		resourceID := model.StableID(cluster, "failover-pod")
+		initial := time.Now().UTC().Add(-2 * time.Minute)
+		firstCutoff := initial.Add(30 * time.Second)
+		latestCutoff := initial.Add(time.Minute)
+		resource := model.Resource{ID: resourceID, Cluster: cluster, UID: "failover-pod", Group: "core", Version: "v1", Kind: "Pod", Namespace: "failover", Name: "pod", ResourceVersion: "1", State: model.StateOK, ObservedAt: initial}
+
+		tx, txErr := db.BeginTx(ctx, nil)
+		if txErr != nil {
+			t.Fatal(txErr)
+		}
+		if txErr = applyResource(ctx, tx, "upsert", shard, resource); txErr == nil {
+			marker := model.Resource{Cluster: cluster, ObservedAt: firstCutoff}
+			txErr = applyResource(ctx, tx, "reconcile", shard, marker)
+		}
+		if txErr == nil {
+			marker := model.Resource{Cluster: cluster, ObservedAt: latestCutoff}
+			txErr = applyResource(ctx, tx, "reconcile", shard, marker)
+		}
+		if txErr == nil {
+			resource.ObservedAt = firstCutoff.Add(15 * time.Second)
+			resource.State = model.StateCritical
+			resource.Reason = "stale replay"
+			txErr = applyResource(ctx, tx, "upsert", shard, resource)
+		}
+		if txErr != nil {
+			_ = tx.Rollback()
+			t.Fatal(txErr)
+		}
+		if txErr = tx.Commit(); txErr != nil {
+			t.Fatal(txErr)
+		}
+
+		var deletedAt sql.NullTime
+		var observedAt time.Time
+		var state string
+		if scanErr := db.QueryRowContext(ctx, `SELECT deleted_at,observed_at,state FROM resource WHERE id=$1`, resourceID).Scan(&deletedAt, &observedAt, &state); scanErr != nil {
+			t.Fatal(scanErr)
+		}
+		if !deletedAt.Valid || !observedAt.Equal(latestCutoff) || state != string(model.StateOK) {
+			t.Fatalf("stale replay changed reconciled resource: deleted=%v observed=%s state=%s", deletedAt.Valid, observedAt, state)
+		}
+	})
 }

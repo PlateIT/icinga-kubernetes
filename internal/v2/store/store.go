@@ -141,7 +141,7 @@ func (s Store) Changes(ctx context.Context, after int64, limit int) ([]Change, e
 }
 
 func (s Store) ListBusinessProcesses(ctx context.Context) ([]BusinessProcess, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT name,generation,updated_at FROM business_process ORDER BY lower(name),name`)
+	rows, err := s.DB.QueryContext(ctx, `/*NO LOAD BALANCE*/ SELECT name,generation,updated_at FROM business_process ORDER BY lower(name),name`)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +158,7 @@ func (s Store) ListBusinessProcesses(ctx context.Context) ([]BusinessProcess, er
 }
 func (s Store) GetBusinessProcess(ctx context.Context, name string) (BusinessProcess, error) {
 	var p BusinessProcess
-	err := s.DB.QueryRowContext(ctx, `SELECT name,definition,generation,updated_at FROM business_process WHERE name=$1`, name).Scan(&p.Name, &p.Definition, &p.Generation, &p.UpdatedAt)
+	err := s.DB.QueryRowContext(ctx, `/*NO LOAD BALANCE*/ SELECT name,definition,generation,updated_at FROM business_process WHERE name=$1`, name).Scan(&p.Name, &p.Definition, &p.Generation, &p.UpdatedAt)
 	return p, err
 }
 func (s Store) PutBusinessProcess(ctx context.Context, name string, definition json.RawMessage, expectedGeneration int64) (BusinessProcess, error) {
@@ -357,9 +357,13 @@ func applyResource(ctx context.Context, tx *sql.Tx, action, shard string, r mode
 	}
 	if action == "reconcile" {
 		_, err := tx.ExecContext(ctx, `WITH removed AS (
-			UPDATE resource SET deleted_at=clock_timestamp(),changed_at=clock_timestamp()
+			UPDATE resource SET deleted_at=clock_timestamp(),observed_at=$3,changed_at=clock_timestamp()
 			WHERE cluster_name=$1 AND shard=$2 AND deleted_at IS NULL AND observed_at < $3
 			RETURNING id,cluster_name,api_group,api_version,kind,namespace,name,labels,state,reason
+		), watermarked AS (
+			UPDATE resource SET observed_at=$3
+			WHERE cluster_name=$1 AND shard=$2 AND deleted_at IS NOT NULL AND observed_at < $3
+			RETURNING id
 		), queued AS (
 			INSERT INTO notification_outbox(resource_id,cluster_name,api_group,api_version,kind,namespace,name,labels,state,reason,action)
 			SELECT id,cluster_name,api_group,api_version,kind,namespace,name,labels,state,reason,'delete'
@@ -370,7 +374,7 @@ func applyResource(ctx context.Context, tx *sql.Tx, action, shard string, r mode
 			SELECT id,cluster_name,'delete' FROM removed
 			RETURNING resource_id
 		)
-		SELECT (SELECT count(*) FROM queued)+(SELECT count(*) FROM changed)`, r.Cluster, shard, r.ObservedAt)
+		SELECT (SELECT count(*) FROM queued)+(SELECT count(*) FROM changed)+(SELECT count(*) FROM watermarked)`, r.Cluster, shard, r.ObservedAt)
 		return err
 	}
 	labels, _ := json.Marshal(r.Labels)
@@ -379,16 +383,23 @@ func applyResource(ctx context.Context, tx *sql.Tx, action, shard string, r mode
 	summary, _ := json.Marshal(r.Summary)
 	var previousState, previousReason sql.NullString
 	var previousDeletedAt sql.NullTime
+	var previousObservedAt time.Time
 	var relationsUnchanged bool
 	previousExists := true
-	if err := tx.QueryRowContext(ctx, `SELECT state,reason,deleted_at,
+	if err := tx.QueryRowContext(ctx, `SELECT state,reason,deleted_at,observed_at,
 		labels=$2::jsonb AND api_group=$3 AND api_version=$4 AND kind=$5 AND namespace=$6 AND name=$7
 		FROM resource WHERE id=$1 FOR UPDATE`, r.ID, labels, r.Group, r.Version, r.Kind, r.Namespace, r.Name).
-		Scan(&previousState, &previousReason, &previousDeletedAt, &relationsUnchanged); err != nil {
+		Scan(&previousState, &previousReason, &previousDeletedAt, &previousObservedAt, &relationsUnchanged); err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
 		previousExists = false
+	}
+	// A former leader may replay its durable spool after a new leader has
+	// completed a newer snapshot. Never let that older observation resurrect
+	// or roll back the resource.
+	if previousExists && r.ObservedAt.Before(previousObservedAt) {
+		return nil
 	}
 	deletedAt := r.DeletedAt
 	if action == "delete" && deletedAt == nil {
@@ -615,7 +626,7 @@ func (s Store) ResolveSelector(ctx context.Context, f ListFilter) (SelectorResol
 		return SelectorResolution{}, err
 	}
 	args = append(args, 1000)
-	query := `SELECT r.id,r.cluster_name,r.kubernetes_uid,r.api_group,r.api_version,r.kind,r.namespace,r.name,r.resource_version,
+	query := `/*NO LOAD BALANCE*/ SELECT r.id,r.cluster_name,r.kubernetes_uid,r.api_group,r.api_version,r.kind,r.namespace,r.name,r.resource_version,
 		r.labels,r.annotations,r.conditions,r.summary,r.state,r.reason,r.observed_at,r.deleted_at,
 		count(*) OVER (),
 		count(*) FILTER (WHERE r.state='ok') OVER (),
@@ -661,7 +672,7 @@ func (s Store) GetIDs(ctx context.Context, ids []string) ([]model.Resource, erro
 		args[i] = id
 		placeholders[i] = fmt.Sprintf("$%d", i+1)
 	}
-	rows, err := s.DB.QueryContext(ctx, `SELECT r.id,r.cluster_name,r.kubernetes_uid,r.api_group,r.api_version,r.kind,r.namespace,r.name,r.resource_version,
+	rows, err := s.DB.QueryContext(ctx, `/*NO LOAD BALANCE*/ SELECT r.id,r.cluster_name,r.kubernetes_uid,r.api_group,r.api_version,r.kind,r.namespace,r.name,r.resource_version,
 		r.labels,r.annotations,r.conditions,r.summary,r.state,r.reason,r.observed_at,r.deleted_at
 		FROM resource r WHERE r.deleted_at IS NULL AND r.id IN (`+strings.Join(placeholders, ",")+`)`, args...)
 	if err != nil {
@@ -703,7 +714,7 @@ func (s Store) ChildrenMany(ctx context.Context, ids []string) (map[string][]mod
 		args[i] = uid
 		marks[i] = fmt.Sprintf("$%d", i+1)
 	}
-	rows, err := s.DB.QueryContext(ctx, `SELECT r.id,r.cluster_name,r.kubernetes_uid,r.api_group,r.api_version,r.kind,r.namespace,r.name,r.resource_version,r.labels,r.annotations,r.conditions,r.summary,r.state,r.reason,r.observed_at,r.deleted_at,o.owner_uid FROM resource_owner o JOIN resource r ON r.id=o.resource_id WHERE r.deleted_at IS NULL AND o.owner_uid IN (`+strings.Join(marks, ",")+`)`, args...)
+	rows, err := s.DB.QueryContext(ctx, `/*NO LOAD BALANCE*/ SELECT r.id,r.cluster_name,r.kubernetes_uid,r.api_group,r.api_version,r.kind,r.namespace,r.name,r.resource_version,r.labels,r.annotations,r.conditions,r.summary,r.state,r.reason,r.observed_at,r.deleted_at,o.owner_uid FROM resource_owner o JOIN resource r ON r.id=o.resource_id WHERE r.deleted_at IS NULL AND o.owner_uid IN (`+strings.Join(marks, ",")+`)`, args...)
 	if err != nil {
 		return nil, err
 	}

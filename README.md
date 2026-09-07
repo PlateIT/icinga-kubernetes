@@ -13,8 +13,9 @@ The same binary runs one explicit role selected by `ICINGA_KUBERNETES_ROLE`:
 - `api` accepts durable collector batches and serves resources, selectors,
   relationship graphs, business-process definitions, SSE and one-hop federation.
 - `worker` consumes the PostgreSQL inbox and updates the normalized inventory.
-- `collector` discovers all list/watch-capable APIs, owns GVR shards through
-  Kubernetes Leases and sends sanitized changes to the API.
+- `collector` intersects a fixed monitoring allowlist with its effective
+  namespace permissions and distributes permitted namespace watches over a
+  bounded set of Kubernetes Lease partitions.
 
 Application roles never create, drop or mutate database schema.
 
@@ -25,14 +26,19 @@ Application roles never create, drop or mutate database schema.
   markers recover deletions missed during outages.
 - Failed API deliveries are stored atomically in a persistent local spool and
   replayed in order.
+- Effective namespace permissions are refreshed every five minutes. Namespace
+  names are deterministically assigned to at most 16 Lease partitions per
+  allowed GVR, so busy resources scale across collectors without
+  per-namespace lease amplification.
 - Collector batches are split by their encoded JSON size as well as event count,
   so a large CRD projection cannot create a permanently unplayable spool head.
 - Secret values and complete manifests are never persisted.
 - Rebuildable Kubernetes Events and tombstones are retained for seven days by
   default; the technical change log and applied inbox rows default to one hour.
-- Unknown CRDs are represented generically. Built-in adapters cover core
-  OpenShift, OLM, Argo CD and External Secrets resources; declarative adapters
-  can be mounted as JSON and are reloaded without executable plugins.
+- The collector never expands access because a CRD appears. Its fixed baseline
+  covers core workloads, canonical `core/v1` events, networking, autoscaling, Routes and the
+  separately authorized cluster-health resources. Declarative adapters can
+  enrich an already permitted kind and are reloaded without executable code.
 - Federation is direct and read-only. A federated request is never forwarded a
   second time. Short outages use a timestamped PostgreSQL cache: cached data is
   `live` below 30 seconds, `stale` from 30 seconds and `unavailable` from two
@@ -59,17 +65,11 @@ Application roles never create, drop or mutate database schema.
 `GET /api/v1/live/resources/{id}/metrics` selects a bounded default catalog for
 the resource kind and executes the range queries against the local cluster
 monitoring endpoint. The catalog covers common workload, node, namespace,
-storage, autoscaling and availability metrics. On OpenShift it also uses the
-documented per-object series for Routes, ClusterOperators, DeploymentConfigs,
-Builds, BuildConfigs, OLM ClusterServiceVersions and CatalogSources.
-ImageStreams, MachineConfigPools, Subscriptions and InstallPlans intentionally
-receive no guessed default PromQL when the platform exposes no stable series
-that identifies exactly one such object; their inventory state remains
-available and a validated declarative adapter can add a deployment-specific
-metric. `PodMonitor` and
-`ServiceMonitor` objects are interpreted live, including their label selectors,
-so their selected targets and `up` state can be shown without duplicating
-samples.
+storage, autoscaling and availability metrics. On OpenShift it also uses
+documented per-object series for Routes and ClusterOperators. Metrics are
+queried live and are never copied into the inventory database. Additional
+metric templates may enrich only an object kind already admitted by the fixed
+collector allowlist.
 
 Declarative adapters can add up to 16 kind-specific metric templates using the
 escaped placeholders `{{cluster}}`, `{{namespace}}`, `{{name}}` and `{{kind}}`.
@@ -112,10 +112,10 @@ enter a batch.
 
 Collectors also reload a strict version-1 resync document from
 `ICINGA_KUBERNETES_RESYNC_FILE`. Each request contains an immutable unique ID
-and one exact group/version/resource. A new request cancels and recreates only
-that GVR's local leader-election shard on every collector; Kubernetes Leases
-still ensure that exactly one collector performs the full list/reconciliation
-cycle. Requests for undiscovered GVRs remain pending, duplicate IDs and changed
+and one exact group/version/resource. A new request cancels and recreates that
+GVR owner on every collector; the elected owner then restarts all currently
+permitted namespace list/reconciliation cycles.
+Requests for unavailable or unauthorized GVRs remain pending, duplicate IDs and changed
 ID meanings fail closed, and the metric
 `icinga_kubernetes_collector_resync_total` exposes applications per collector.
 The Helm chart owns this document through `icingaKubernetes.resyncRequests`.

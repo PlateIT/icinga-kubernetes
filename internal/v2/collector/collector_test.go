@@ -12,12 +12,22 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/icinga/icinga-kubernetes/internal/v2/adapter"
 	"github.com/icinga/icinga-kubernetes/internal/v2/config"
 	"github.com/icinga/icinga-kubernetes/internal/v2/model"
 	"github.com/icinga/icinga-kubernetes/internal/v2/operational"
+	authorizationv1 "k8s.io/api/authorization/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	kubernetesfake "k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/leaderelection"
 )
 
@@ -25,6 +35,154 @@ func TestRunLeaderElectionRejectsInvalidConfigurationWithoutPanic(t *testing.T) 
 	err := runLeaderElection(context.Background(), leaderelection.LeaderElectionConfig{})
 	if err == nil || !strings.Contains(err.Error(), "leaseDuration must be greater than renewDeadline") {
 		t.Fatalf("unexpected validation result: %v", err)
+	}
+}
+
+func TestCollectorAllowlistExcludesSensitiveAndArbitraryResources(t *testing.T) {
+	for _, gvr := range []schema.GroupVersionResource{
+		{Version: "v1", Resource: "secrets"},
+		{Version: "v1", Resource: "configmaps"},
+		{Group: "events.k8s.io", Version: "v1", Resource: "events"},
+		{Group: "example.test", Version: "v1", Resource: "widgets"},
+	} {
+		if allowlisted(namespacedAllowlist, gvr) || allowlisted(clusterAllowlist, gvr) {
+			t.Fatalf("resource unexpectedly allowlisted: %s", gvr)
+		}
+	}
+	for _, gvr := range []schema.GroupVersionResource{
+		{Version: "v1", Resource: "pods"},
+		{Group: "apps", Version: "v1", Resource: "deployments"},
+		{Group: "route.openshift.io", Version: "v1", Resource: "routes"},
+	} {
+		if !allowlisted(namespacedAllowlist, gvr) {
+			t.Fatalf("required namespaced resource missing from allowlist: %s", gvr)
+		}
+	}
+}
+
+func TestClusterPermissionsUseExplicitAccessReviews(t *testing.T) {
+	client := kubernetesfake.NewSimpleClientset()
+	var reviewed []authorizationv1.ResourceAttributes
+	client.PrependReactor("create", "selfsubjectaccessreviews", func(action ktesting.Action) (bool, runtime.Object, error) {
+		review := action.(ktesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
+		reviewed = append(reviewed, *review.Spec.ResourceAttributes)
+		return true, &authorizationv1.SelfSubjectAccessReview{Status: authorizationv1.SubjectAccessReviewStatus{Allowed: true}}, nil
+	})
+	gvr := schema.GroupVersionResource{Group: "config.openshift.io", Version: "v1", Resource: "clusteroperators"}
+	c := &Collector{kubernetes: client}
+	allowed, complete, err := c.effectiveClusterPermissions(context.Background(), map[schema.GroupVersionResource]bool{gvr: false})
+	if err != nil || !complete || !allowed[gvr] {
+		t.Fatalf("cluster permission result = allowed %v, complete %v, error %v", allowed[gvr], complete, err)
+	}
+	if len(reviewed) != 2 || reviewed[0].Namespace != "" || reviewed[1].Namespace != "" {
+		t.Fatalf("cluster access reviews = %#v", reviewed)
+	}
+	if reviewed[0].Verb != "list" || reviewed[1].Verb != "watch" {
+		t.Fatalf("reviewed verbs = %q, %q", reviewed[0].Verb, reviewed[1].Verb)
+	}
+}
+
+func TestRulesReviewFallbackRequiresListAndWatch(t *testing.T) {
+	client := kubernetesfake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-a"}})
+	client.PrependReactor("create", "selfsubjectrulesreviews", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "authorization.k8s.io", Resource: "selfsubjectrulesreviews"}, "", errors.New("denied"))
+	})
+	var reviewed []authorizationv1.ResourceAttributes
+	client.PrependReactor("create", "selfsubjectaccessreviews", func(action ktesting.Action) (bool, runtime.Object, error) {
+		attributes := *action.(ktesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview).Spec.ResourceAttributes
+		reviewed = append(reviewed, attributes)
+		return true, &authorizationv1.SelfSubjectAccessReview{Status: authorizationv1.SubjectAccessReviewStatus{Allowed: attributes.Verb == "list"}}, nil
+	})
+	pods := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+	c := &Collector{kubernetes: client}
+	rules, complete, err := c.effectiveRules(context.Background(), map[schema.GroupVersionResource]bool{pods: true})
+	if err != nil || !complete {
+		t.Fatalf("fallback result incomplete: complete=%v err=%v", complete, err)
+	}
+	if ruleAllows(rules["team-a"], pods, "list", "watch") {
+		t.Fatal("list-only permission was incorrectly promoted to watch permission")
+	}
+	if len(reviewed) != 2 || reviewed[0].Namespace != "team-a" || reviewed[0].Verb != "list" || reviewed[1].Verb != "watch" {
+		t.Fatalf("fallback access reviews = %#v", reviewed)
+	}
+}
+
+func TestIncompletePermissionRefreshPreservesExistingNamespaces(t *testing.T) {
+	target := leaseShard{GVR: schema.GroupVersionResource{Version: "v1", Resource: "pods"}, Partition: 3}
+	wanted := map[leaseShard]map[string]bool{}
+	existing := map[leaseShard]*shardState{target: newShardState(map[string]bool{"team-a": true})}
+	preserveExistingNamespaces(wanted, existing)
+	if !wanted[target]["team-a"] {
+		t.Fatal("incomplete permission refresh removed an existing namespace")
+	}
+}
+
+func TestConfirmedPermissionRevocationReconcilesNamespace(t *testing.T) {
+	received := make(chan model.IngestBatch, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var batch model.IngestBatch
+		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		received <- batch
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+	sender, err := NewSender(config.Config{APIURL: server.URL, CollectorToken: "token", SpoolPath: t.TempDir(), SpoolMaxBytes: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	state := newShardState(map[string]bool{"team-a": true})
+	pods := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+	c := &Collector{
+		cfg:      config.Config{ClusterName: "cluster", BatchSize: 10},
+		dynamic:  dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{pods: "PodList"}),
+		sender:   sender,
+		adapters: adapter.New(),
+		metrics:  operational.New("collector"),
+	}
+	go func() {
+		defer close(done)
+		c.watchNamespaces(ctx, pods, state)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	select {
+	case <-received: // initial list reconciliation
+	case <-time.After(2 * time.Second):
+		t.Fatal("initial namespace reconciliation was not sent")
+	}
+	state.update(map[string]bool{})
+	select {
+	case batch := <-received:
+		if len(batch.Events) != 1 || batch.Events[0].Action != "reconcile" || batch.Shard != "/v1, Resource=pods@team-a" {
+			t.Fatalf("revocation batch = %#v", batch)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("permission revocation did not reconcile the namespace")
+	}
+}
+
+func TestEffectiveRuleIntersectionAndNamespaceShardIdentity(t *testing.T) {
+	rules := []authorizationv1.ResourceRule{{Verbs: []string{"get", "list", "watch"}, APIGroups: []string{"apps"}, Resources: []string{"deployments"}}}
+	deployments := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	if !ruleAllows(rules, deployments, "list", "watch") {
+		t.Fatal("explicit list/watch permission was not recognized")
+	}
+	if ruleAllows(rules, schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"}, "list", "watch") {
+		t.Fatal("permission leaked to another resource")
+	}
+	restricted := []authorizationv1.ResourceRule{{Verbs: []string{"list", "watch"}, APIGroups: []string{"apps"}, Resources: []string{"deployments"}, ResourceNames: []string{"only-this-one"}}}
+	if ruleAllows(restricted, deployments, "list", "watch") {
+		t.Fatal("resourceNames restriction was incorrectly treated as collection-wide permission")
+	}
+	if shardName(shard{GVR: deployments, Namespace: "team-a"}) == shardName(shard{GVR: deployments, Namespace: "team-b"}) {
+		t.Fatal("namespace shards share an identity")
 	}
 }
 
@@ -201,5 +359,94 @@ func TestNewSenderFailsClosedWhenSpoolCannotBeInitialized(t *testing.T) {
 	}
 	if _, err := NewSender(config.Config{SpoolPath: filepath.Join(parentFile, "spool"), SpoolMaxBytes: 1024}); err == nil {
 		t.Fatal("sender accepted an unusable spool path")
+	}
+}
+
+func TestPartitionNamespacesIsBoundedAndStable(t *testing.T) {
+	pods := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+	wanted := map[schema.GroupVersionResource]map[string]bool{pods: {}}
+	for i := 0; i < 1000; i++ {
+		wanted[pods][fmt.Sprintf("namespace-%04d", i)] = true
+	}
+	first := partitionNamespaces(wanted)
+	second := partitionNamespaces(wanted)
+	if len(first) != int(namespaceLeasePartitions) {
+		t.Fatalf("partition count = %d, want %d", len(first), namespaceLeasePartitions)
+	}
+	for target, namespaces := range first {
+		if target.Partition >= namespaceLeasePartitions || len(namespaces) == 0 {
+			t.Fatalf("invalid partition %#v with %d namespaces", target, len(namespaces))
+		}
+		if len(second[target]) != len(namespaces) {
+			t.Fatalf("partition %d is not stable", target.Partition)
+		}
+	}
+}
+
+func TestNamespaceShardNameIsUsedForUpsertsAndReconcile(t *testing.T) {
+	target := shard{GVR: schema.GroupVersionResource{Version: "v1", Resource: "pods"}, Namespace: "team-a"}
+	want := "/v1, Resource=pods@team-a"
+	if got := shardName(target); got != want {
+		t.Fatalf("shard name = %q, want %q", got, want)
+	}
+
+	received := make(chan model.IngestBatch, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var batch model.IngestBatch
+		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		received <- batch
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+	sender, err := NewSender(config.Config{APIURL: server.URL, CollectorToken: "token", SpoolPath: t.TempDir(), SpoolMaxBytes: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Collector{cfg: config.Config{ClusterName: "cluster"}, sender: sender, metrics: operational.New("collector")}
+	c.flush(context.Background(), target, []model.IngestEvent{{EventID: "event", Action: "upsert", Resource: model.Resource{UID: "uid"}}})
+	if got := (<-received).Shard; got != want {
+		t.Fatalf("upsert shard = %q, reconcile shard = %q", got, want)
+	}
+}
+
+func TestReconcileWithoutDiscoverableOrPermittedResourcesIsReady(t *testing.T) {
+	client := kubernetesfake.NewSimpleClientset()
+	metrics := operational.New("collector")
+	collector := &Collector{
+		cfg:           config.Config{LeaseNamespace: "icinga"},
+		dynamic:       dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()),
+		discovery:     client.Discovery(),
+		kubernetes:    client,
+		adapters:      adapter.New(),
+		metrics:       metrics,
+		shards:        map[leaseShard]context.CancelFunc{},
+		shardStates:   map[leaseShard]*shardState{},
+		appliedResync: map[string]schema.GroupVersionResource{},
+	}
+	if err := collector.reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	metrics.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("zero-rights collector readiness = %d, want 200", response.Code)
+	}
+}
+
+func TestCollectorReadinessDistinguishesZeroRightsFromFailedDiscovery(t *testing.T) {
+	if !collectorReady(nil, true, 0) {
+		t.Fatal("successful discovery with zero rights must be ready")
+	}
+	if collectorReady(errors.New("api unavailable"), true, 0) {
+		t.Fatal("failed discovery without an existing shard must not be ready")
+	}
+	if collectorReady(nil, false, 0) {
+		t.Fatal("incomplete permission discovery without an existing shard must not be ready")
+	}
+	if !collectorReady(errors.New("partial discovery"), false, 1) {
+		t.Fatal("an existing shard must remain ready during a partial discovery failure")
 	}
 }
