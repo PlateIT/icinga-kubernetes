@@ -11,7 +11,7 @@ func TestRouteIngressAdmission(t *testing.T) {
 	for _, tc := range []struct {
 		status   string
 		expected model.State
-	}{{"True", model.StateOK}, {"False", model.StateCritical}} {
+	}{{"True", model.StateOK}, {"False", model.StateCritical}, {"Unknown", model.StateUnknown}} {
 		obj := &unstructured.Unstructured{Object: map[string]any{
 			"kind": "Route", "metadata": map[string]any{"name": "demo", "uid": "route-uid"},
 			"status": map[string]any{"ingress": []any{map[string]any{"conditions": []any{map[string]any{"type": "Admitted", "status": tc.status, "reason": "Admission"}}}}},

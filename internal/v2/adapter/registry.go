@@ -240,6 +240,14 @@ func (r *Registry) Describe(gvr schema.GroupVersionResource, obj *unstructured.U
 			}
 		}
 	}
+	if selected.Name == "openshift-route" {
+		for _, c := range conditions {
+			if c.Type == "Admitted" && strings.EqualFold(c.Status, "True") {
+				return model.StateOK, "Route admitted by router", summary
+			}
+		}
+		return model.StateUnknown, "Route admission has not been confirmed", summary
+	}
 	statusObserved := false
 	warningReason := ""
 	for _, field := range selected.StatusFields {
