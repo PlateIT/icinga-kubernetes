@@ -37,6 +37,7 @@ paths:
     get:
       operationId: listResources
       parameters:
+        - {name: hideZeroReplicaSets, in: query, description: Exclude apps ReplicaSets with an explicitly zero desired replica count before pagination, schema: {type: boolean, default: false}}
         - {$ref: '#/components/parameters/Cluster'}
         - {$ref: '#/components/parameters/Group'}
         - {$ref: '#/components/parameters/Version'}
@@ -67,6 +68,7 @@ paths:
       operationId: listResourceTypes
       description: Lists bounded GVK facets from the PostgreSQL inventory, applying exact resource filters before counting; deleted objects are excluded.
       parameters:
+        - {name: hideZeroReplicaSets, in: query, description: Exclude apps ReplicaSets with an explicitly zero desired replica count before counting, schema: {type: boolean, default: false}}
         - {$ref: '#/components/parameters/Cluster'}
         - {$ref: '#/components/parameters/Group'}
         - {$ref: '#/components/parameters/Version'}

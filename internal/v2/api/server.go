@@ -1093,6 +1093,7 @@ func (s *Server) resources(w http.ResponseWriter, r *http.Request) {
 	if state := q.Get("state"); state != "" {
 		f.States = []model.State{model.State(state)}
 	}
+	f.HideZeroReplicaSets = q.Get("hideZeroReplicaSets") == "true"
 	p, err := s.Store.List(r.Context(), f)
 	if err != nil {
 		s.fail(w, err)
@@ -1105,7 +1106,8 @@ func (s *Server) resources(w http.ResponseWriter, r *http.Request) {
 
 func validateResourceListQuery(q url.Values) error {
 	maximums := map[string]int{
-		"cluster": 253, "group": 512, "version": 512, "kind": 128,
+		"hideZeroReplicaSets": 5,
+		"cluster":             253, "group": 512, "version": 512, "kind": 128,
 		"namespace": 253, "name": 512, "namePrefix": 512, "labels": 4096,
 		"state": 8, "limit": 4, "order": 2, "cursor": 4096, "ownerUID": 512,
 	}
@@ -1114,6 +1116,9 @@ func validateResourceListQuery(q url.Values) error {
 		if len(values) > 1 || (len(values) == 1 && (len(values[0]) > maximum || strings.ContainsRune(values[0], '\x00'))) {
 			return fmt.Errorf("invalid %s", name)
 		}
+	}
+	if value := q.Get("hideZeroReplicaSets"); value != "" && value != "true" && value != "false" {
+		return errors.New("invalid hideZeroReplicaSets")
 	}
 	if cluster := q.Get("cluster"); cluster != "" && !businessProcessClusterPattern.MatchString(cluster) {
 		return errors.New("invalid cluster")
@@ -1156,6 +1161,7 @@ func (s *Server) resourceTypes(w http.ResponseWriter, r *http.Request) {
 	if state := q.Get("state"); state != "" {
 		f.States = []model.State{model.State(state)}
 	}
+	f.HideZeroReplicaSets = q.Get("hideZeroReplicaSets") == "true"
 	items, err := s.Store.ResourceTypes(r.Context(), cluster, f)
 	if err != nil {
 		s.fail(w, err)

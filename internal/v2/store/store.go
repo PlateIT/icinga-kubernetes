@@ -27,6 +27,7 @@ type ListFilter struct {
 	Limit                                                      int
 	Cursor                                                     string
 	OrderByID                                                  bool
+	HideZeroReplicaSets                                        bool
 }
 
 type Page struct {
@@ -546,6 +547,9 @@ func decodeNameCursor(cursor string) (string, int64, error) {
 func buildResourceFilter(f ListFilter, includeCursor bool) ([]any, []string, error) {
 	args := []any{}
 	where := []string{"r.deleted_at IS NULL"}
+	if f.HideZeroReplicaSets {
+		where = append(where, "NOT (r.api_group='apps' AND r.kind='ReplicaSet' AND COALESCE(r.summary->>'spec.replicas','')='0')")
+	}
 	add := func(column, value string) {
 		if value != "" {
 			args = append(args, value)
