@@ -31,7 +31,7 @@ func TestKubernetesEventAdaptersKeepCompactEventMeaning(t *testing.T) {
 	// Kubernetes discovery represents the core API group as an empty string;
 	// persisted/API resources expose the stable external name "core".
 	state, reason, summary := registry.Describe(schema.GroupVersionResource{Group: "", Version: "v1", Resource: "events"}, object, nil)
-	if state != model.StateCritical || reason != "type: Warning" {
+	if state != model.StateWarning || reason != "type: Warning" {
 		t.Fatalf("state=%s reason=%q", state, reason)
 	}
 	if summary["reason"] != "BackOff" || summary["involvedObject.name"] != "demo" || summary["adapter"] != "kubernetes-core-event" {
