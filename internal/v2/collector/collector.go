@@ -604,7 +604,7 @@ func (c *Collector) watch(ctx context.Context, target shard) {
 			}
 			events := make([]model.IngestEvent, 0, c.cfg.BatchSize)
 			for i := range list.Items {
-				events = append(events, c.event("upsert", gvr, &list.Items[i]))
+				events = append(events, c.snapshotEvent(gvr, &list.Items[i], snapshotStarted))
 				if len(events) >= c.cfg.BatchSize {
 					c.flush(ctx, target, events)
 					events = nil
@@ -690,6 +690,14 @@ func (c *Collector) flush(ctx context.Context, target shard, events []model.Inge
 		return
 	}
 	c.metrics.Processed(uint64(len(events)))
+}
+
+func (c *Collector) snapshotEvent(gvr schema.GroupVersionResource, obj *unstructured.Unstructured, started time.Time) model.IngestEvent {
+	event := c.event("upsert", gvr, obj)
+	// Every list must refresh observations before its reconcile marker, even
+	// when the object RV is unchanged. Retries of this snapshot remain idempotent.
+	event.EventID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(event.EventID+"\x00snapshot\x00"+started.Format(time.RFC3339Nano))).String()
+	return event
 }
 
 func (c *Collector) event(action string, gvr schema.GroupVersionResource, obj *unstructured.Unstructured) model.IngestEvent {
