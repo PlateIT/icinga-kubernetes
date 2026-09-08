@@ -139,6 +139,7 @@ func TestPostgreSQLOpenAPIResponses(t *testing.T) {
 		{http.MethodGet, "/api/v1/status", "", "integration-reader", http.StatusOK},
 		{http.MethodGet, "/api/v1/resources?cluster=" + cluster + "&labels=app%3Ddemo&limit=10", "", "integration-reader", http.StatusOK},
 		{http.MethodGet, "/api/v1/resource-types?cluster=" + cluster, "", "integration-reader", http.StatusOK},
+		{http.MethodGet, "/api/v1/resource-namespaces?cluster=" + cluster, "", "integration-reader", http.StatusOK},
 		{http.MethodGet, "/api/v1/branches", "", "integration-reader", http.StatusOK},
 		{http.MethodPost, "/api/v1/resources/batch-get", `{"ids":["` + id + `"]}`, "integration-reader", http.StatusOK},
 		{http.MethodPost, "/api/v1/selectors/resolve", `{"cluster":"` + cluster + `","kind":"Deployment","labels":"app=demo","aggregation":"and"}`, "integration-reader", http.StatusOK},

@@ -232,6 +232,14 @@ func TestPostgreSQLLifecycle(t *testing.T) {
 		t.Fatalf("version projection not updated: %#v err=%v", items, err)
 	}
 	types, err := s.ResourceTypes(ctx, cluster)
+	namespaces, namespaceErr := s.ResourceNamespaces(ctx, ListFilter{Cluster: cluster, Kind: resource.Kind})
+	if namespaceErr != nil || len(namespaces) != 1 || namespaces[0] != resource.Namespace {
+		t.Fatalf("namespace inventory=%#v err=%v", namespaces, namespaceErr)
+	}
+	hiddenNamespaces, namespaceErr := s.ResourceNamespaces(ctx, ListFilter{Cluster: cluster, Namespace: "not-visible"})
+	if namespaceErr != nil || len(hiddenNamespaces) != 0 {
+		t.Fatalf("filtered namespace inventory=%#v err=%v", hiddenNamespaces, namespaceErr)
+	}
 	if err != nil || len(types) != 1 || types[0] != (ResourceType{Group: "apps", Version: "v2", Kind: "Deployment", Count: 1}) {
 		t.Fatalf("resource type inventory=%#v err=%v", types, err)
 	}

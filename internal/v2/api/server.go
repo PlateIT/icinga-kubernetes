@@ -96,6 +96,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/status", s.authorize("reader", http.HandlerFunc(s.status)))
 	mux.Handle("GET /api/v1/resources", s.authorize("reader", http.HandlerFunc(s.resources)))
 	mux.Handle("GET /api/v1/resource-types", s.authorize("reader", http.HandlerFunc(s.resourceTypes)))
+	mux.Handle("GET /api/v1/resource-namespaces", s.authorize("reader", http.HandlerFunc(s.resourceNamespaces)))
 	mux.Handle("POST /api/v1/resources/batch-get", s.authorize("reader", http.HandlerFunc(s.batchGet)))
 	mux.Handle("POST /api/v1/selectors/resolve", s.authorize("reader", http.HandlerFunc(s.resolveSelector)))
 	mux.Handle("POST /api/v1/graph/resolve", s.authorize("reader", http.HandlerFunc(s.resolveGraph)))
@@ -1136,6 +1137,14 @@ func validateResourceListQuery(q url.Values) error {
 }
 
 func (s *Server) resourceTypes(w http.ResponseWriter, r *http.Request) {
+	s.resourceInventory(w, r, false)
+}
+
+func (s *Server) resourceNamespaces(w http.ResponseWriter, r *http.Request) {
+	s.resourceInventory(w, r, true)
+}
+
+func (s *Server) resourceInventory(w http.ResponseWriter, r *http.Request, namespaces bool) {
 	q := r.URL.Query()
 	if err := validateResourceListQuery(q); err != nil {
 		writeError(w, 400, err.Error())
@@ -1162,7 +1171,12 @@ func (s *Server) resourceTypes(w http.ResponseWriter, r *http.Request) {
 		f.States = []model.State{model.State(state)}
 	}
 	f.HideZeroReplicaSets = q.Get("hideZeroReplicaSets") == "true"
-	items, err := s.Store.ResourceTypes(r.Context(), cluster, f)
+	var items any
+	if namespaces {
+		items, err = s.Store.ResourceNamespaces(r.Context(), f)
+	} else {
+		items, err = s.Store.ResourceTypes(r.Context(), cluster, f)
+	}
 	if err != nil {
 		s.fail(w, err)
 		return
