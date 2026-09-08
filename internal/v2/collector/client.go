@@ -238,7 +238,7 @@ func (s *Sender) replay(ctx context.Context) error {
 	}
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
+		if !entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") && strings.HasSuffix(entry.Name(), ".json") {
 			names = append(names, entry.Name())
 		}
 	}
@@ -275,7 +275,7 @@ func (s *Sender) spoolUsage() (files, bytes int64, err error) {
 		return 0, 0, err
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
 		info, statErr := entry.Info()

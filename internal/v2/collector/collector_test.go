@@ -31,6 +31,23 @@ import (
 	"k8s.io/client-go/tools/leaderelection"
 )
 
+func TestReplayIgnoresIncompleteTemporarySpoolFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".interrupted.json"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	sender, err := NewSender(config.Config{SpoolPath: dir, SpoolMaxBytes: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sender.spoolFiles != 0 {
+		t.Fatal("uncommitted temporary file counted as a queued batch")
+	}
+	if err := sender.replay(context.Background()); err != nil {
+		t.Fatalf("interrupted atomic write blocks replay: %v", err)
+	}
+}
+
 func TestSnapshotRefreshesUnchangedObjectsBeforeReconciliation(t *testing.T) {
 	c := &Collector{cfg: config.Config{ClusterName: "test"}, adapters: adapter.New()}
 	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"}
