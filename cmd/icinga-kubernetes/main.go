@@ -2,908 +2,141 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"flag"
+	"database/sql"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
-	"strings"
-	"sync"
+	"os/signal"
+	"syscall"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
-	"github.com/google/uuid"
-	"github.com/icinga/icinga-go-library/backoff"
-	"github.com/icinga/icinga-go-library/config"
-	"github.com/icinga/icinga-go-library/database"
-	"github.com/icinga/icinga-go-library/logging"
-	"github.com/icinga/icinga-go-library/periodic"
-	"github.com/icinga/icinga-go-library/retry"
-	"github.com/icinga/icinga-go-library/types"
-	"github.com/icinga/icinga-kubernetes/internal"
-	cachev1 "github.com/icinga/icinga-kubernetes/internal/cache/v1"
-	"github.com/icinga/icinga-kubernetes/pkg/cluster"
-	kcom "github.com/icinga/icinga-kubernetes/pkg/com"
-	"github.com/icinga/icinga-kubernetes/pkg/daemon"
-	kdatabase "github.com/icinga/icinga-kubernetes/pkg/database"
-	"github.com/icinga/icinga-kubernetes/pkg/metrics"
-	"github.com/icinga/icinga-kubernetes/pkg/notifications"
-	schemav1 "github.com/icinga/icinga-kubernetes/pkg/schema/v1"
-	syncv1 "github.com/icinga/icinga-kubernetes/pkg/sync/v1"
-	k8sMysql "github.com/icinga/icinga-kubernetes/schema/mysql"
-	k8sPgsql "github.com/icinga/icinga-kubernetes/schema/pgsql"
-	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
-	"github.com/okzk/sdnotify"
-	"github.com/pkg/errors"
-	promapi "github.com/prometheus/client_golang/api"
-	promv1 "github.com/prometheus/client_golang/api/prometheus/v1"
-	"github.com/spf13/pflag"
-	"golang.org/x/sync/errgroup"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/util/runtime"
-	"k8s.io/client-go/informers"
-	v2 "k8s.io/client-go/informers/core/v1"
-	"k8s.io/client-go/kubernetes"
-	kcache "k8s.io/client-go/tools/cache"
-	kclientcmd "k8s.io/client-go/tools/clientcmd"
-	"k8s.io/klog/v2"
+
+	"github.com/icinga/icinga-kubernetes/internal/v2/api"
+	"github.com/icinga/icinga-kubernetes/internal/v2/collector"
+	"github.com/icinga/icinga-kubernetes/internal/v2/config"
+	"github.com/icinga/icinga-kubernetes/internal/v2/notifier"
+	"github.com/icinga/icinga-kubernetes/internal/v2/operational"
+	"github.com/icinga/icinga-kubernetes/internal/v2/store"
+	"github.com/icinga/icinga-kubernetes/internal/v2/telemetry"
+	"github.com/icinga/icinga-kubernetes/internal/v2/worker"
 )
 
-const expectedSchemaVersion = "0.4.0"
-
 func main() {
-	runtime.ReallyCrash = true
-
-	var glue daemon.ConfigFlagGlue
-	var showVersion bool
-	var clusterName string
-
-	klog.InitFlags(nil)
-	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
-
-	pflag.BoolVar(&showVersion, "version", false, "print version and exit")
-	pflag.StringVar(
-		&glue.Config,
-		"config",
-		"",
-		fmt.Sprintf("path to the config file (default: %s)", daemon.DefaultConfigPath),
-	)
-	pflag.StringVar(&clusterName, "cluster-name", "", "name of the current cluster")
-
-	loadingRules := kclientcmd.NewDefaultClientConfigLoadingRules()
-	loadingRules.DefaultClientConfig = &kclientcmd.DefaultClientConfig
-	pflag.StringVar(&loadingRules.ExplicitPath, "kubeconfig", "", "Path to a kube config. Only required if out-of-cluster")
-
-	overrides := kclientcmd.ConfigOverrides{}
-	kflags := kclientcmd.RecommendedConfigOverrideFlags("")
-	kflags.ContextOverrideFlags.Namespace = kclientcmd.FlagInfo{}
-	kclientcmd.BindOverrideFlags(&overrides, pflag.CommandLine, kflags)
-
-	pflag.Parse()
-
-	if showVersion {
-		internal.Version.Print("Icinga Kubernetes")
-		os.Exit(0)
-	}
-
-	klog.Infof("Starting Icinga for Kubernetes (%s)", internal.Version.Version)
-
-	kconfig, err := kclientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, &overrides).ClientConfig()
-	if err != nil {
-		if kclientcmd.IsEmptyConfig(err) {
-			klog.Fatal(
-				"no configuration provided: set KUBECONFIG environment variable or --kubeconfig CLI flag to" +
-					" a kubeconfig file with cluster access configured")
-		}
-
-		klog.Fatal(errors.Wrap(err, "cannot configure Kubernetes client"))
-	}
-
-	if serverName, ok := os.LookupEnv("KUBERNETES_SERVER"); ok {
-		kconfig.Host = serverName
-	}
-
-	clientset, err := kubernetes.NewForConfig(kconfig)
-	if err != nil {
-		klog.Fatal(err)
-	}
-
-	klog.Infof("Conntected to %s", kconfig.Host)
-
-	factory := informers.NewSharedInformerFactory(clientset, 0)
-	log := klog.NewKlogr()
-
-	var cfg daemon.Config
-
-	if err = config.Load(&cfg, config.LoadOptions{
-		Flags:      glue,
-		EnvOptions: config.EnvOptions{Prefix: "ICINGA_FOR_KUBERNETES_"},
-	}); err != nil {
-		klog.Fatal(errors.Wrap(err, "can't create configuration"))
-	}
-
-	logs, err := logging.NewLoggingFromConfig("Icinga Kubernetes", cfg.Logging)
-	if err != nil {
-		klog.Fatal(errors.Wrap(err, "cannot configure logging"))
-	}
-
-	db, err := database.NewDbFromConfig(&cfg.Database, logs.GetChildLogger("database"), database.RetryConnectorCallbacks{})
-	if err != nil {
-		klog.Fatal("IGL_DATABASE: ", err)
-	}
-
-	dbLog := log.WithName("database")
-	kdb, err := kdatabase.NewFromSqlxDb(&cfg.Database, dbLog, db.DB)
-	if err != nil {
-		klog.Fatal(err)
-	}
-
-	// When started by systemd, NOTIFY_SOCKET is set by systemd for Type=notify supervised services, which was the
-	// default setting for the Icinga for Kubernetes service. Before switching to Type=simple. For Type=notify,
-	// we need to tell systemd, that Icinga for Kubernetes finished starting up.
-	_ = sdnotify.Ready()
-
-	if !kdb.Connect() {
-		return
-	}
-
-	hasSchema, err := dbHasSchema(kdb, cfg.Database.Database)
-	if err != nil {
-		klog.Fatal(err)
-	}
-
-	g, ctx := errgroup.WithContext(context.Background())
-
-	if hasSchema {
-		var version string
-
-		err = retry.WithBackoff(
-			ctx,
-			func(ctx context.Context) (err error) {
-				query := "SELECT version FROM kubernetes_schema ORDER BY id DESC LIMIT 1"
-				err = kdb.QueryRowxContext(ctx, query).Scan(&version)
-				if err != nil {
-					err = kdatabase.CantPerformQuery(err, query)
-				}
-				return
-			},
-			retry.Retryable,
-			backoff.NewExponentialWithJitter(128*time.Millisecond, 1*time.Minute),
-			retry.Settings{})
-		if err != nil {
-			klog.Fatal(err)
-		}
-
-		if version != expectedSchemaVersion {
-			err = retry.WithBackoff(
-				ctx,
-				func(ctx context.Context) (err error) {
-					rows, err := dbTables(kdb, cfg.Database.Database)
-					if err != nil {
-						klog.Fatal(err)
-					}
-					defer func() {
-						_ = rows.Close()
-					}()
-
-					dbLog.Info("Dropping schema")
-
-					for rows.Next() {
-						var tableName string
-						if err := rows.Scan(&tableName); err != nil {
-							klog.Fatal(err)
-						}
-
-						_, err := kdb.Exec(dropTableStmt(kdb, tableName))
-						if err != nil {
-							klog.Fatal(err)
-						}
-					}
-					return
-				},
-				retry.Retryable,
-				backoff.NewExponentialWithJitter(128*time.Millisecond, 1*time.Minute),
-				retry.Settings{})
-			if err != nil {
-				klog.Fatal(err)
-			}
-
-			hasSchema = false
-		}
-	}
-
-	if !hasSchema {
-		dbLog.Info("Importing schema")
-
-		schema, err := schemaForDatabase(&cfg.Database, kdb.DriverName())
-		if err != nil {
-			klog.Fatal(err)
-		}
-
-		for _, ddl := range strings.Split(schema, ";") {
-			if ddl = strings.TrimSpace(ddl); ddl != "" {
-				if _, err := kdb.Exec(ddl); err != nil {
-					klog.Fatal(err)
-				}
-			}
-		}
-	}
-
-	if clusterName == "" {
-		clusterName = os.Getenv("ICINGA_FOR_KUBERNETES_CLUSTER_NAME")
-	}
-
-	namespaceName := "kube-system"
-	ns, err := clientset.CoreV1().Namespaces().Get(context.TODO(), namespaceName, v1.GetOptions{})
-	if err != nil {
-		klog.Fatalf("Failed to retrieve namespace '%s' for cluster '%s': %v", namespaceName, clusterName, err)
-	}
-
-	clusterInstance := &schemav1.Cluster{
-		Uuid: schemav1.EnsureUUID(ns.UID),
-		Name: schemav1.NewNullableString(clusterName),
-	}
-
-	ctx = cluster.NewClusterUuidContext(ctx, clusterInstance.Uuid)
-
-	stmt, _ := kdb.BuildUpsertStmt(clusterInstance)
-	if _, err := kdb.NamedExecContext(ctx, stmt, clusterInstance); err != nil {
-		klog.Error(errors.Wrap(err, "cannot update cluster"))
-	}
-
-	if _, err := kdb.ExecContext(ctx, kdb.Rebind("DELETE FROM kubernetes_instance WHERE cluster_uuid = ?"), clusterInstance.Uuid); err != nil {
-		klog.Fatal(errors.Wrap(err, "cannot delete instance"))
-	}
-	// ,omitempty
-	var kubernetesVersion string
-	var kubernetesHeartbeat time.Time
-	instanceId := uuid.New()
-	defer periodic.Start(ctx, 55*time.Second, func(tick periodic.Tick) {
-		version, err := clientset.Discovery().ServerVersion()
-		if err == nil {
-			kubernetesVersion = version.GitVersion
-			kubernetesHeartbeat = tick.Time
-		}
-
-		instance := schemav1.Instance{
-			Uuid:                instanceId[:],
-			ClusterUuid:         clusterInstance.Uuid,
-			Version:             internal.Version.Version,
-			KubernetesVersion:   schemav1.NewNullableString(kubernetesVersion),
-			KubernetesHeartbeat: types.UnixMilli(kubernetesHeartbeat),
-			KubernetesApiReachable: types.Bool{
-				Bool:  err == nil,
-				Valid: true,
-			},
-			Message:   schemav1.NewNullableString(err),
-			Heartbeat: types.UnixMilli(tick.Time),
-		}
-
-		stmt, _ := kdb.BuildUpsertStmt(instance)
-
-		if _, err := kdb.NamedExecContext(ctx, stmt, instance); err != nil {
-			klog.Error(errors.Wrap(err, "cannot update instance"))
-		}
-	}, periodic.Immediate()).Stop()
-
-	if err := internal.SyncNotificationsConfig(ctx, db, &cfg.Notifications, clusterInstance.Uuid); err != nil {
-		klog.Fatal(err)
-	}
-
-	if cfg.Notifications.Url != "" {
-		klog.Infof("Sending notifications to %s", cfg.Notifications.Url)
-
-		nclient, err := notifications.NewClient("icinga-kubernetes/"+internal.Version.Version, cfg.Notifications, db)
-		if err != nil {
-			klog.Fatal(err)
-		}
-
-		type objectTags struct {
-			UUID        string `json:"uuid"`
-			ClusterUUID string `json:"cluster_uuid"`
-			Resource    string `json:"resource"`
-			Name        string `json:"name"`
-			Namespace   string `json:"namespace"`
-		}
-
-		type incident struct {
-			// Incident   string `json:"incident"`
-			ObjectTags objectTags `json:"object_tags"`
-			// Severity string `json:"severity"`
-		}
-
-		defer periodic.Start(ctx, 5*time.Minute, func(tick periodic.Tick) {
-			r, err := nclient.Incidents(ctx)
-			if err != nil {
-				klog.Errorf("Cannot fetch incidents: %v", err)
-				return
-			}
-			defer func() { _ = r.Close() }()
-
-			var incidents []incident
-			if err := json.NewDecoder(r).Decode(&incidents); err != nil {
-				klog.Errorf("Cannot decode incidents: %v", err)
-				return
-			}
-
-			objectTagMap := make(map[string]objectTags)
-			uuidMap := make(map[string][]types.UUID)
-			for _, inc := range incidents {
-				objectTagMap[inc.ObjectTags.UUID] = inc.ObjectTags
-				uuidMap[inc.ObjectTags.Resource] = append(uuidMap[inc.ObjectTags.Resource], types.UUID{UUID: uuid.MustParse(inc.ObjectTags.UUID)})
-			}
-
-			ng, nctx := errgroup.WithContext(ctx)
-
-			for kind, uuids := range uuidMap {
-				ng.Go(func() error {
-					q, args, err := sqlx.In(fmt.Sprintf("SELECT uuid FROM %s WHERE uuid IN (?)", kind), uuids)
-					if err != nil {
-						return err
-					}
-
-					rows, err := db.QueryxContext(nctx, db.Rebind(q), args...)
-					if err != nil {
-						return err
-					}
-					defer func() { _ = rows.Close() }()
-					for rows.Next() {
-						var _uuid types.UUID
-						if err := rows.Scan(&_uuid); err != nil {
-							return err
-						}
-
-						delete(objectTagMap, _uuid.String())
-					}
-
-					return nil
-				})
-			}
-
-			if err := ng.Wait(); err != nil {
-				klog.Errorf("Cannot fetch orphaned incidents: %v", err)
-			}
-
-			for _, tags := range objectTagMap {
-				var clusterUuid types.UUID
-				_tags := map[string]string{
-					"uuid":      tags.UUID,
-					"resource":  tags.Resource,
-					"name":      tags.Name,
-					"namespace": tags.Namespace,
-				}
-				if tags.ClusterUUID != "" {
-					clusterUuid = types.UUID{UUID: uuid.MustParse(tags.ClusterUUID)}
-					_tags["cluster_uuid"] = tags.ClusterUUID
-				}
-				ev := notifications.Event{
-					Uuid:        types.UUID{UUID: uuid.MustParse(tags.UUID)},
-					ClusterUuid: clusterUuid,
-					Kind:        tags.Resource,
-					Name:        kcache.NewObjectName(tags.Namespace, tags.Name).String(),
-					Severity:    "ok",
-					Message:     "Automatically resolving the incident because of an orphaned resource.",
-					URL:         &url.URL{Path: fmt.Sprintf("/%s", strings.ReplaceAll(tags.Resource, "_", "")), RawQuery: fmt.Sprintf("id=%s", tags.UUID)},
-					Tags:        _tags,
-					ExtraTags:   nil,
-				}
-				klog.Infof("Deleting orphaned incident: %q", ev.Name)
-				if err := nclient.ProcessEvent(ctx, ev); err != nil {
-					klog.Errorf("Cannot delete orphaned incident: %v", err)
-				}
-			}
-		}, periodic.Immediate()).Stop()
-
-		g.Go(func() error {
-			return nclient.Stream(ctx, cachev1.Multiplexers().Nodes().UpsertEvents().Out())
-		})
-
-		g.Go(func() error {
-			return nclient.Stream(ctx, cachev1.Multiplexers().DaemonSets().UpsertEvents().Out())
-		})
-
-		g.Go(func() error {
-			return nclient.Stream(ctx, cachev1.Multiplexers().StatefulSets().UpsertEvents().Out())
-		})
-
-		g.Go(func() error {
-			return nclient.Stream(ctx, cachev1.Multiplexers().Deployments().UpsertEvents().Out())
-		})
-
-		g.Go(func() error {
-			return nclient.Stream(ctx, cachev1.Multiplexers().ReplicaSets().UpsertEvents().Out())
-		})
-
-		g.Go(func() error {
-			return nclient.Stream(ctx, cachev1.Multiplexers().Pods().UpsertEvents().Out())
-		})
-	}
-
-	g.Go(func() error {
-		return SyncServicePods(ctx, kdb, factory.Core().V1().Services(), factory.Core().V1().Pods())
-	})
-
-	err = internal.SyncPrometheusConfig(ctx, db, &cfg.Prometheus, clusterInstance.Uuid)
-	if err != nil {
-		klog.Error(errors.Wrap(err, "cannot sync prometheus config"))
-	}
-
-	if cfg.Prometheus.Url == "" {
-		err = internal.AutoDetectPrometheus(ctx, clientset, &cfg.Prometheus)
-		if err != nil {
-			klog.Error(errors.Wrap(err, "cannot auto-detect prometheus"))
-		}
-	}
-
-	if cfg.Prometheus.Url != "" {
-		basicAuthTransport := &kcom.BasicAuthTransport{}
-
-		if cfg.Prometheus.Insecure == "true" {
-			basicAuthTransport.Insecure = true
-		}
-
-		var roundTripper http.RoundTripper = basicAuthTransport
-		if cfg.Prometheus.Username != "" {
-			basicAuthTransport.Username = cfg.Prometheus.Username
-			basicAuthTransport.Password = cfg.Prometheus.Password
-		} else if cfg.Prometheus.Token != "" || cfg.Prometheus.TokenFile != "" {
-			roundTripper = &kcom.BearerTokenTransport{
-				RoundTripper: basicAuthTransport,
-				Token:        cfg.Prometheus.Token,
-				TokenFile:    cfg.Prometheus.TokenFile,
-			}
-		}
-
-		promClient, err := promapi.NewClient(promapi.Config{
-			Address:      cfg.Prometheus.Url,
-			RoundTripper: roundTripper,
-		})
-		if err != nil {
-			klog.Fatal(errors.Wrap(err, "error creating Prometheus client"))
-		}
-
-		promApiClient := promv1.NewAPI(promClient)
-		promMetricSync := metrics.NewPromMetricSync(promApiClient, db, logs.GetChildLogger("prometheus"))
-
-		g.Go(func() error {
-			return promMetricSync.Nodes(ctx, factory.Core().V1().Nodes().Informer())
-		})
-
-		g.Go(func() error {
-			return promMetricSync.Pods(ctx, factory.Core().V1().Pods().Informer())
-		})
-	}
-
-	g.Go(func() error {
-		s := syncv1.NewSync(kdb, factory.Core().V1().Namespaces().Informer(), log.WithName("namespaces"), schemav1.NewNamespace)
-
-		return s.Run(ctx)
-	})
-
-	wg := sync.WaitGroup{}
-
-	wg.Add(1)
-	g.Go(func() error {
-		s := syncv1.NewSync(kdb, factory.Core().V1().Nodes().Informer(), log.WithName("nodes"), schemav1.NewNode)
-
-		var forwardForNotifications []syncv1.Feature
-		if cfg.Notifications.Url != "" {
-			forwardForNotifications = append(
-				forwardForNotifications,
-				syncv1.WithOnUpsert(database.OnSuccessSendTo(cachev1.Multiplexers().Nodes().UpsertEvents().In())),
-				syncv1.WithOnDelete(database.OnSuccessSendTo(cachev1.Multiplexers().Nodes().DeleteEvents().In())),
-			)
-		}
-
-		wg.Done()
-
-		return s.Run(ctx, forwardForNotifications...)
-	})
-
-	wg.Add(1)
-	g.Go(func() error {
-		schemav1.SyncContainers(
-			ctx,
-			kdb,
-			g,
-			cachev1.Multiplexers().Pods().UpsertEvents().Out(),
-			cachev1.Multiplexers().Pods().DeleteEvents().Out(),
-		)
-
-		f := schemav1.NewPodFactory(clientset)
-		s := syncv1.NewSync(kdb, factory.Core().V1().Pods().Informer(), log.WithName("pods"), f.New)
-
-		wg.Done()
-
-		return s.Run(
-			ctx,
-			syncv1.WithOnUpsert(database.OnSuccessSendTo(cachev1.Multiplexers().Pods().UpsertEvents().In())),
-			syncv1.WithOnDelete(database.OnSuccessSendTo(cachev1.Multiplexers().Pods().DeleteEvents().In())),
-		)
-	})
-
-	wg.Add(1)
-	g.Go(func() error {
-		s := syncv1.NewSync(
-			kdb, factory.Apps().V1().Deployments().Informer(), log.WithName("deployments"), schemav1.NewDeployment)
-
-		var forwardForNotifications []syncv1.Feature
-		if cfg.Notifications.Url != "" {
-			forwardForNotifications = append(
-				forwardForNotifications,
-				syncv1.WithOnUpsert(database.OnSuccessSendTo(cachev1.Multiplexers().Deployments().UpsertEvents().In())),
-				syncv1.WithOnDelete(database.OnSuccessSendTo(cachev1.Multiplexers().Deployments().DeleteEvents().In())),
-			)
-		}
-
-		wg.Done()
-
-		return s.Run(ctx, forwardForNotifications...)
-	})
-
-	wg.Add(1)
-	g.Go(func() error {
-		s := syncv1.NewSync(
-			kdb, factory.Apps().V1().DaemonSets().Informer(), log.WithName("daemon-sets"), schemav1.NewDaemonSet)
-
-		var forwardForNotifications []syncv1.Feature
-		if cfg.Notifications.Url != "" {
-			forwardForNotifications = append(
-				forwardForNotifications,
-				syncv1.WithOnUpsert(database.OnSuccessSendTo(cachev1.Multiplexers().DaemonSets().UpsertEvents().In())),
-				syncv1.WithOnDelete(database.OnSuccessSendTo(cachev1.Multiplexers().DaemonSets().DeleteEvents().In())),
-			)
-		}
-
-		wg.Done()
-
-		return s.Run(ctx, forwardForNotifications...)
-	})
-
-	wg.Add(1)
-	g.Go(func() error {
-		s := syncv1.NewSync(
-			kdb, factory.Apps().V1().ReplicaSets().Informer(), log.WithName("replica-sets"), schemav1.NewReplicaSet)
-
-		var forwardForNotifications []syncv1.Feature
-		if cfg.Notifications.Url != "" {
-			forwardForNotifications = append(
-				forwardForNotifications,
-				syncv1.WithOnUpsert(database.OnSuccessSendTo(cachev1.Multiplexers().ReplicaSets().UpsertEvents().In())),
-				syncv1.WithOnDelete(database.OnSuccessSendTo(cachev1.Multiplexers().ReplicaSets().DeleteEvents().In())),
-			)
-		}
-
-		wg.Done()
-
-		return s.Run(ctx, forwardForNotifications...)
-	})
-
-	wg.Add(1)
-	g.Go(func() error {
-		s := syncv1.NewSync(
-			kdb, factory.Apps().V1().StatefulSets().Informer(), log.WithName("stateful-sets"), schemav1.NewStatefulSet)
-
-		var forwardForNotifications []syncv1.Feature
-		if cfg.Notifications.Url != "" {
-			forwardForNotifications = append(
-				forwardForNotifications,
-				syncv1.WithOnUpsert(database.OnSuccessSendTo(cachev1.Multiplexers().StatefulSets().UpsertEvents().In())),
-				syncv1.WithOnDelete(database.OnSuccessSendTo(cachev1.Multiplexers().StatefulSets().DeleteEvents().In())),
-			)
-		}
-
-		wg.Done()
-
-		return s.Run(ctx, forwardForNotifications...)
-	})
-
-	g.Go(func() error {
-		f := schemav1.NewServiceFactory(clientset)
-		s := syncv1.NewSync(kdb, factory.Core().V1().Services().Informer(), log.WithName("services"), f.NewService)
-
-		return s.Run(
-			ctx,
-			syncv1.WithOnUpsert(database.OnSuccessSendTo(cachev1.Multiplexers().Services().UpsertEvents().In())),
-		)
-	})
-
-	g.Go(func() error {
-		s := syncv1.NewSync(kdb, factory.Discovery().V1().EndpointSlices().Informer(), log.WithName("endpoints"), schemav1.NewEndpointSlice)
-
-		return s.Run(ctx)
-	})
-
-	g.Go(func() error {
-		s := syncv1.NewSync(kdb, factory.Core().V1().Secrets().Informer(), log.WithName("secrets"), schemav1.NewSecret)
-		return s.Run(ctx)
-	})
-
-	g.Go(func() error {
-		s := syncv1.NewSync(kdb, factory.Core().V1().ConfigMaps().Informer(), log.WithName("config-maps"), schemav1.NewConfigMap)
-
-		return s.Run(ctx)
-	})
-
-	g.Go(func() error {
-		s := syncv1.NewSync(kdb, factory.Events().V1().Events().Informer(), log.WithName("events"), schemav1.NewEvent)
-
-		return s.Run(ctx, syncv1.WithNoDelete(), syncv1.WithNoWarumup())
-	})
-
-	g.Go(func() error {
-		s := syncv1.NewSync(kdb, factory.Core().V1().PersistentVolumeClaims().Informer(), log.WithName("pvcs"), schemav1.NewPvc)
-
-		return s.Run(ctx)
-	})
-
-	g.Go(func() error {
-		s := syncv1.NewSync(kdb, factory.Core().V1().PersistentVolumes().Informer(), log.WithName("persistent-volumes"), schemav1.NewPersistentVolume)
-
-		return s.Run(ctx)
-	})
-
-	g.Go(func() error {
-		s := syncv1.NewSync(kdb, factory.Batch().V1().Jobs().Informer(), log.WithName("jobs"), schemav1.NewJob)
-
-		return s.Run(ctx)
-	})
-
-	g.Go(func() error {
-		s := syncv1.NewSync(kdb, factory.Batch().V1().CronJobs().Informer(), log.WithName("cron-jobs"), schemav1.NewCronJob)
-
-		return s.Run(ctx)
-	})
-
-	g.Go(func() error {
-		s := syncv1.NewSync(kdb, factory.Networking().V1().Ingresses().Informer(), log.WithName("ingresses"), schemav1.NewIngress)
-
-		return s.Run(ctx)
-	})
-
-	g.Go(func() error {
-		wg.Wait()
-
-		klog.V(2).Info("Starting multiplexers")
-
-		return cachev1.Multiplexers().Run(ctx)
-	})
-
-	g.Go(func() error {
-		return kdb.PeriodicCleanup(ctx, kdatabase.CleanupStmt{
-			Table:  "event",
-			PK:     "uuid",
-			Column: "created",
-		})
-	})
-
-	g.Go(func() error {
-		return kdb.PeriodicCleanup(ctx, kdatabase.CleanupStmt{
-			Table:  "prometheus_cluster_metric",
-			PK:     "(cluster_uuid, timestamp, category, name)",
-			Column: "timestamp",
-		})
-	})
-
-	g.Go(func() error {
-		return kdb.PeriodicCleanup(ctx, kdatabase.CleanupStmt{
-			Table:  "prometheus_node_metric",
-			PK:     "(node_uuid, timestamp, category, name)",
-			Column: "timestamp",
-		})
-	})
-
-	g.Go(func() error {
-		return kdb.PeriodicCleanup(ctx, kdatabase.CleanupStmt{
-			Table:  "prometheus_pod_metric",
-			PK:     "(pod_uuid, timestamp, category, name)",
-			Column: "timestamp",
-		})
-	})
-
-	g.Go(func() error {
-		return kdb.PeriodicCleanup(ctx, kdatabase.CleanupStmt{
-			Table:  "prometheus_container_metric",
-			PK:     "(container_uuid, timestamp, category, name)",
-			Column: "timestamp",
-		})
-	})
-
-	if err := g.Wait(); err != nil {
-		klog.Fatal(err)
+	if err := run(); err != nil && !errors.Is(err, context.Canceled) {
+		slog.Error("icinga kubernetes stopped", "error", err)
+		os.Exit(1)
 	}
 }
 
-// dbHasSchema queries via db whether the database dbName has a table named "kubernetes_schema".
-func dbHasSchema(db *kdatabase.Database, dbName string) (bool, error) {
-	var rows *sqlx.Rows
-	var err error
-
-	switch {
-	case kdatabase.IsMySQLDriver(db.DriverName()):
-		rows, err = db.Queryx(
-			db.Rebind("SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME='kubernetes_schema'"),
-			dbName,
-		)
-	case kdatabase.IsPostgreSQLDriver(db.DriverName()):
-		rows, err = db.Queryx("SELECT to_regclass('kubernetes_schema') IS NOT NULL")
+func run() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	shutdownTelemetry, err := telemetry.Setup(ctx, cfg.Role, cfg.ClusterName)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(shutdownCtx); err != nil {
+			slog.Warn("OpenTelemetry shutdown failed", "error", err)
+		}
+	}()
+	slog.Info("starting icinga kubernetes", "role", cfg.Role, "cluster", cfg.ClusterName)
+	if cfg.Role == "collector" {
+		metrics := operational.New(cfg.Role)
+		return operational.Run(ctx, cfg.ProbeListen, metrics, func(roleCtx context.Context) error {
+			return collector.Run(roleCtx, cfg, metrics)
+		})
+	}
+	db, err := sql.Open("postgres", cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	maxOpenConnections := 30
+	if cfg.Role == "api" {
+		// Keep concurrent inventory reads below the point where PostgreSQL random
+		// I/O starves the independently connected worker replicas during a relist.
+		maxOpenConnections = 16
+	}
+	db.SetMaxOpenConns(maxOpenConnections)
+	db.SetMaxIdleConns(10)
+	db.SetConnMaxLifetime(30 * time.Minute)
+	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := db.PingContext(pingCtx); err != nil {
+		return fmt.Errorf("connect PostgreSQL: %w", err)
+	}
+	if cfg.Role == "migrate" {
+		return store.Migrate(ctx, db)
+	}
+	if err := store.CheckSchema(ctx, db); err != nil {
+		return err
+	}
+	switch cfg.Role {
+	case "api":
+		return serve(ctx, cfg, db)
+	case "worker":
+		host, _ := os.Hostname()
+		metrics := operational.New(cfg.Role)
+		return operational.Run(ctx, cfg.ProbeListen, metrics, func(roleCtx context.Context) error {
+			if cfg.NotificationsURL == "" {
+				return worker.Run(roleCtx, cfg, store.Store{DB: db}, host, metrics)
+			}
+			return runWorkerAndNotifier(roleCtx, cfg, db, host, metrics)
+		})
 	default:
-		return false, fmt.Errorf("unsupported database driver %q", db.DriverName())
+		return fmt.Errorf("unsupported role %s", cfg.Role)
 	}
+}
+
+func runWorkerAndNotifier(ctx context.Context, cfg config.Config, db *sql.DB, identity string, metrics *operational.Metrics) error {
+	roleCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	errorsCh := make(chan error, 2)
+	go func() { errorsCh <- worker.Run(roleCtx, cfg, store.Store{DB: db}, identity, metrics) }()
+	go func() { errorsCh <- notifier.Run(roleCtx, cfg, db, identity) }()
+	first := <-errorsCh
+	cancel()
+	second := <-errorsCh
+	if (first == nil || errors.Is(first, context.Canceled)) && second != nil && !errors.Is(second, context.Canceled) {
+		return second
+	}
+	return first
+}
+
+func serve(ctx context.Context, cfg config.Config, db *sql.DB) error {
+	apiServer, err := api.New(cfg, db)
 	if err != nil {
-		return false, err
+		return err
 	}
-
-	defer func() { _ = rows.Close() }()
-
-	if kdatabase.IsPostgreSQLDriver(db.DriverName()) {
-		var exists bool
-		if rows.Next() {
-			if err := rows.Scan(&exists); err != nil {
-				return false, err
-			}
+	httpServer := &http.Server{
+		Addr: cfg.Listen, Handler: apiServer.Handler(), ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout: 30 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 1 << 20,
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		slog.Info("api listening", "address", cfg.Listen)
+		errCh <- httpServer.ListenAndServe()
+	}()
+	select {
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		return httpServer.Shutdown(shutdownCtx)
+	case err := <-errCh:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
 		}
-
-		return exists, rows.Err()
+		return err
 	}
-
-	return rows.Next(), rows.Err()
-}
-
-func dbTables(db *kdatabase.Database, dbName string) (*sqlx.Rows, error) {
-	switch {
-	case kdatabase.IsMySQLDriver(db.DriverName()):
-		return db.Queryx(
-			db.Rebind("SELECT table_name FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=?"),
-			dbName,
-		)
-	case kdatabase.IsPostgreSQLDriver(db.DriverName()):
-		return db.Queryx("SELECT tablename FROM pg_tables WHERE schemaname = current_schema()")
-	default:
-		return nil, fmt.Errorf("unsupported database driver %q", db.DriverName())
-	}
-}
-
-func schemaForDatabase(config *database.Config, driverName string) (string, error) {
-	switch {
-	case kdatabase.IsMySQLDriver(driverName) && config.Type != "pgsql":
-		return k8sMysql.Schema, nil
-	case kdatabase.IsPostgreSQLDriver(driverName), config.Type == "pgsql":
-		return k8sPgsql.Schema, nil
-	default:
-		return "", fmt.Errorf("unsupported database type %q with driver %q", config.Type, driverName)
-	}
-}
-
-func dropTableStmt(db *kdatabase.Database, tableName string) string {
-	stmt := fmt.Sprintf("DROP TABLE %s", db.QuoteIdentifier(tableName))
-	if kdatabase.IsPostgreSQLDriver(db.DriverName()) {
-		stmt += " CASCADE"
-	}
-
-	return stmt
-}
-
-func SyncServicePods(ctx context.Context, db *kdatabase.Database, serviceList v2.ServiceInformer, podList v2.PodInformer) error {
-	servicePods := make(chan any)
-
-	g, ctx := errgroup.WithContext(ctx)
-	g.Go(func() error {
-		return db.UpsertStreamed(ctx, servicePods)
-	})
-
-	g.Go(func() error {
-		ch := cachev1.Multiplexers().Pods().UpsertEvents().Out()
-		for {
-			select {
-			case pod, more := <-ch:
-				if !more {
-					return nil
-				}
-
-				services, err := serviceList.Lister().List(labels.NewSelector())
-				if err != nil {
-					return err
-				}
-
-				podLabels := make(labels.Set)
-				for _, label := range pod.(*schemav1.Pod).Labels {
-					podLabels[label.Name] = label.Value
-				}
-
-				for _, service := range services {
-					if len(service.Spec.Selector) == 0 {
-						continue
-					}
-
-					labelSelector := &v1.LabelSelector{MatchLabels: service.Spec.Selector}
-					selector, err := v1.LabelSelectorAsSelector(labelSelector)
-					if err != nil {
-						return err
-					}
-
-					if selector.Matches(podLabels) {
-						select {
-						case servicePods <- schemav1.ServicePod{
-							ServiceUuid: schemav1.EnsureUUID(service.UID),
-							PodUuid:     pod.(*schemav1.Pod).Uuid,
-						}:
-						case <-ctx.Done():
-							return ctx.Err()
-						}
-					}
-				}
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-	})
-
-	g.Go(func() error {
-		ch := cachev1.Multiplexers().Services().UpsertEvents().Out()
-		for {
-			select {
-			case service, more := <-ch:
-				if !more {
-					return nil
-				}
-
-				if len(service.(*schemav1.Service).Selectors) == 0 {
-					continue
-				}
-
-				labelSelector := &v1.LabelSelector{MatchLabels: map[string]string{}}
-				for _, selector := range service.(*schemav1.Service).Selectors {
-					labelSelector.MatchLabels[selector.Name] = selector.Value
-				}
-
-				selector, err := v1.LabelSelectorAsSelector(labelSelector)
-				if err != nil {
-					return err
-				}
-
-				pods, err := podList.Lister().List(selector)
-				if err != nil {
-					return err
-				}
-
-				for _, pod := range pods {
-					select {
-					case servicePods <- schemav1.ServicePod{
-						ServiceUuid: service.(*schemav1.Service).Uuid,
-						PodUuid:     schemav1.EnsureUUID(pod.UID),
-					}:
-					case <-ctx.Done():
-						return ctx.Err()
-					}
-				}
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-	})
-
-	g.Go(func() error {
-		ch := cachev1.Multiplexers().Pods().DeleteEvents().Out()
-		for {
-			select {
-			case podUuid, more := <-ch:
-				if !more {
-					return nil
-				}
-
-				_, err := db.ExecContext(ctx, db.Rebind(`DELETE FROM service_pod WHERE pod_uuid = ?`), podUuid)
-				if err != nil {
-					return err
-				}
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-	})
-
-	return g.Wait()
 }

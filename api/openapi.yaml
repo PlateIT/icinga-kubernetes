@@ -1,0 +1,948 @@
+openapi: 3.0.3
+info:
+  title: Icinga Kubernetes API
+  version: 2.0.0
+  description: Cluster-local inventory, live-data and one-hop federation API.
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+paths:
+  /health/live:
+    get:
+      security: []
+      operationId: liveness
+      responses:
+        '200': {description: Process is alive}
+  /health/ready:
+    get:
+      security: []
+      operationId: readiness
+      responses:
+        '200': {description: API and PostgreSQL are ready}
+        '503': {$ref: '#/components/responses/BackendFailure'}
+  /status:
+    get:
+      operationId: getStatus
+      responses:
+        '200':
+          description: Synchronization and federation status
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Status'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/BackendFailure'}
+  /resources:
+    get:
+      operationId: listResources
+      parameters:
+        - {name: hideZeroReplicaSets, in: query, description: Exclude apps ReplicaSets with an explicitly zero desired replica count before pagination, schema: {type: boolean, default: false}}
+        - {$ref: '#/components/parameters/Cluster'}
+        - {$ref: '#/components/parameters/Group'}
+        - {$ref: '#/components/parameters/Version'}
+        - {$ref: '#/components/parameters/Kind'}
+        - {$ref: '#/components/parameters/Namespace'}
+        - {name: name, in: query, schema: {type: string, maxLength: 512}}
+        - {name: namePrefix, in: query, description: Case-insensitive resource-name prefix; mutually exclusive with name, schema: {type: string, maxLength: 512}}
+        - {name: namePattern, in: query, description: 'Case-insensitive resource-name pattern; * matches any characters. Intersects exact name restrictions.', schema: {type: string, maxLength: 512}}
+        - {name: eventForUID, in: query, description: Events referencing this object UID within the selected cluster, schema: {type: string, maxLength: 512}}
+        - {name: ownerUID, in: query, description: Direct children of this owner UID within the selected cluster, schema: {type: string, maxLength: 512}}
+        - {name: labels, in: query, description: 'Exact Kubernetes label selector key=value[,key=value]', schema: {type: string, maxLength: 4096}}
+        - {name: state, in: query, schema: {type: string, enum: [ok, warning, critical, unknown]}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 1000, default: 100}}
+        - {name: order, in: query, description: Stable globally comparable order for trusted multi-selector consumers, schema: {type: string, enum: [id]}}
+        - {name: cursor, in: query, schema: {type: string, maxLength: 4096, pattern: '^[A-Za-z0-9_-]+$'}}
+      responses:
+        '200':
+          description: Cursor-paginated resource page
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ResourcePage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/BackendFailure'}
+        '508': {$ref: '#/components/responses/LoopDetected'}
+  /resource-types:
+    get:
+      operationId: listResourceTypes
+      description: Lists bounded GVK facets from the PostgreSQL inventory, applying exact resource filters before counting; deleted objects are excluded.
+      parameters:
+        - {name: hideZeroReplicaSets, in: query, description: Exclude apps ReplicaSets with an explicitly zero desired replica count before counting, schema: {type: boolean, default: false}}
+        - {$ref: '#/components/parameters/Cluster'}
+        - {$ref: '#/components/parameters/Group'}
+        - {$ref: '#/components/parameters/Version'}
+        - {$ref: '#/components/parameters/Kind'}
+        - {$ref: '#/components/parameters/Namespace'}
+        - {name: name, in: query, schema: {type: string, maxLength: 512}}
+        - {name: labels, in: query, schema: {type: string, maxLength: 4096}}
+        - {name: state, in: query, schema: {type: string, enum: [ok, warning, critical, unknown]}}
+      responses:
+        '200':
+          description: Resource type inventory
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ResourceTypePage'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/BackendFailure'}
+        '503': {$ref: '#/components/responses/BackendFailure'}
+        '508': {$ref: '#/components/responses/LoopDetected'}
+  /resource-namespaces:
+    get:
+      operationId: listResourceNamespaces
+      description: Lists up to 4096 distinct namespaces of matching non-deleted inventory resources, without requiring collected Namespace objects. Uses the same reader authorization and direct federation as resource-types.
+      parameters:
+        - {$ref: '#/components/parameters/Cluster'}
+        - {$ref: '#/components/parameters/Group'}
+        - {$ref: '#/components/parameters/Version'}
+        - {$ref: '#/components/parameters/Kind'}
+      responses:
+        '200':
+          description: Namespace inventory
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, cluster, freshness]
+                properties:
+                  items: {type: array, maxItems: 4096, uniqueItems: true, items: {type: string, maxLength: 63}}
+                  cluster: {type: string}
+                  freshness: {type: string}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/BackendFailure'}
+        '503': {$ref: '#/components/responses/BackendFailure'}
+        '508': {$ref: '#/components/responses/LoopDetected'}
+  /resources/batch-get:
+    post:
+      operationId: batchGetResources
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              additionalProperties: false
+              properties:
+                ids: {type: array, maxItems: 1000, uniqueItems: true, items: {type: string, format: uuid}}
+      responses:
+        '200':
+          description: Matching resources
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: '#/components/schemas/ResourceWithFreshness'}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/BackendFailure'}
+  /selectors/resolve:
+    post:
+      operationId: resolveSelector
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Selector'}
+      responses:
+        '200':
+          description: Matching resources and aggregate state
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SelectorResult'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/BackendFailure'}
+        '508': {$ref: '#/components/responses/LoopDetected'}
+  /graph/resolve:
+    post:
+      operationId: resolveGraph
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              additionalProperties: false
+              properties:
+                ids: {type: array, maxItems: 100, uniqueItems: true, items: {type: string, format: uuid}}
+                depth: {type: integer, minimum: 1, maximum: 1, default: 1}
+      responses:
+        '200':
+          description: Resource relationship graph
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ResourceGraph'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/BackendFailure'}
+  /branches/status:
+    get:
+      operationId: branchStatus
+      responses:
+        '200':
+          description: Direct federation target status; never transitive and never exposes endpoint URLs or backend errors
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BranchStatusPage'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+  /branches:
+    get:
+      operationId: branchInventory
+      description: Returns configured direct federation names without probing remote endpoints.
+      responses:
+        '200':
+          description: Bounded direct federation inventory; never transitive and never exposes endpoint URLs or credentials
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BranchInventoryPage'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+  /ingest:
+    post:
+      operationId: ingest
+      description: Durable, idempotent collector ingestion.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/IngestBatch'}
+      responses:
+        '202': {description: Batch stored durably}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/BackendFailure'}
+  /events/stream:
+    get:
+      operationId: streamEvents
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          required: false
+          description: Non-negative change-log sequence to resume after; omitted starts at the current tail.
+          schema: {type: integer, format: int64, minimum: 0}
+      responses:
+        '200':
+          description: Server-sent resource changes; clients fall back to polling.
+          content: {text/event-stream: {schema: {type: string}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/BackendFailure'}
+  /business-processes:
+    get:
+      operationId: listBusinessProcesses
+      responses:
+        '200':
+          description: Business process index ordered by name
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/BusinessProcessSummary'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/BackendFailure'}
+  /business-processes/{name}:
+    parameters:
+      - {name: name, in: path, required: true, schema: {type: string, pattern: '^[A-Za-z0-9_.-]+$'}}
+    get:
+      operationId: getBusinessProcess
+      responses:
+        '200':
+          description: Structured business process definition and generation
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BusinessProcess'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/BackendFailure'}
+    put:
+      operationId: putBusinessProcess
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [definition, expectedGeneration]
+              additionalProperties: false
+              properties:
+                definition:
+                  $ref: '#/components/schemas/BusinessProcessDefinition'
+                expectedGeneration:
+                  type: integer
+                  format: int64
+                  minimum: 0
+                  description: Zero creates a new definition; updates require the generation returned by the last read.
+      responses:
+        '200':
+          description: Stored atomically
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BusinessProcess'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/BackendFailure'}
+    delete:
+      operationId: deleteBusinessProcess
+      parameters:
+        - name: expectedGeneration
+          in: query
+          required: true
+          schema: {type: integer, format: int64, minimum: 1}
+      responses:
+        '204': {description: Deleted}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/BackendFailure'}
+  /live/resources/{id}/manifest:
+    get:
+      operationId: getLiveManifest
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {$ref: '#/components/parameters/Cluster'}
+      responses:
+        '200':
+          description: Live sanitized manifest; Secret values are always removed
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/BackendFailure'}
+        '503': {$ref: '#/components/responses/BackendFailure'}
+        '508': {$ref: '#/components/responses/LoopDetected'}
+  /live/resources/{id}/metrics:
+    get:
+      operationId: getLiveResourceMetrics
+      description: Returns the resource-aware default metric catalog and live range data from the responsible cluster monitoring system. No samples are persisted by Icinga Kubernetes.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {$ref: '#/components/parameters/Cluster'}
+        - {name: rangeSeconds, in: query, schema: {type: integer, minimum: 60, maximum: 21600, default: 3600}}
+        - {name: stepSeconds, in: query, schema: {type: integer, minimum: 15, maximum: 300, default: 30}}
+      responses:
+        '200':
+          description: Available resource metrics; individual unavailable series carry an error and no samples
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ResourceMetrics'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/BackendFailure'}
+        '503': {$ref: '#/components/responses/BackendFailure'}
+        '508': {$ref: '#/components/responses/LoopDetected'}
+  /live/pods/{namespace}/{pod}/logs:
+    get:
+      operationId: getLivePodLogs
+      parameters:
+        - {name: namespace, in: path, required: true, schema: {type: string}}
+        - {name: pod, in: path, required: true, schema: {type: string}}
+        - {name: container, in: query, schema: {type: string}}
+        - {name: tailLines, in: query, schema: {type: integer, minimum: 1, maximum: 10000, default: 500}}
+        - {$ref: '#/components/parameters/Cluster'}
+      responses:
+        '200':
+          description: Bounded live log tail
+          content:
+            text/plain:
+              schema: {type: string}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/BackendFailure'}
+        '503': {$ref: '#/components/responses/BackendFailure'}
+        '508': {$ref: '#/components/responses/LoopDetected'}
+  /live/metrics/query:
+    post:
+      operationId: queryLiveMetrics
+      description: Runs one of the server-controlled PromQL templates.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [template]
+              properties:
+                cluster: {type: string}
+                template: {type: string, enum: [pod_cpu, pod_memory, node_cpu, node_memory]}
+                namespace: {type: string}
+                pod: {type: string}
+                node: {type: string}
+                rangeSeconds: {type: integer, minimum: 1, maximum: 21600, description: Optional range ending now; omit for an instant query}
+                stepSeconds: {type: integer, minimum: 15, maximum: 300, default: 30}
+      responses:
+        '200': {$ref: '#/components/responses/PrometheusResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '502': {$ref: '#/components/responses/BackendFailure'}
+        '503': {$ref: '#/components/responses/BackendFailure'}
+        '508': {$ref: '#/components/responses/LoopDetected'}
+  /live/metrics/prometheus/{cluster}/api/v1/query:
+    get:
+      operationId: prometheusInstantQuery
+      description: Bounded read-only Prometheus instant-query proxy for the selected local or directly federated cluster.
+      parameters:
+        - {$ref: '#/components/parameters/RequiredCluster'}
+        - {name: query, in: query, required: true, schema: {type: string, maxLength: 16384}}
+        - {name: time, in: query, schema: {type: string}}
+      responses:
+        '200': {$ref: '#/components/responses/PrometheusResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '502': {$ref: '#/components/responses/BackendFailure'}
+        '503': {$ref: '#/components/responses/BackendFailure'}
+        '508': {$ref: '#/components/responses/LoopDetected'}
+    post:
+      operationId: prometheusInstantQueryForm
+      description: Form-encoded equivalent of prometheusInstantQuery for Grafana compatibility.
+      parameters: [{$ref: '#/components/parameters/RequiredCluster'}]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [query]
+              properties:
+                query: {type: string, minLength: 1, maxLength: 16384}
+                time: {type: string}
+                timeout: {type: string}
+      responses:
+        '200': {$ref: '#/components/responses/PrometheusResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '502': {$ref: '#/components/responses/BackendFailure'}
+        '503': {$ref: '#/components/responses/BackendFailure'}
+        '508': {$ref: '#/components/responses/LoopDetected'}
+        '415': {$ref: '#/components/responses/UnsupportedMediaType'}
+  /live/metrics/prometheus/{cluster}/api/v1/query_range:
+    get:
+      operationId: prometheusRangeQuery
+      description: Prometheus range query limited to six hours and a minimum step of 15 seconds.
+      parameters:
+        - {$ref: '#/components/parameters/RequiredCluster'}
+        - {name: query, in: query, required: true, schema: {type: string, maxLength: 16384}}
+        - {name: start, in: query, required: true, schema: {type: string}}
+        - {name: end, in: query, required: true, schema: {type: string}}
+        - {name: step, in: query, required: true, schema: {type: string}}
+      responses:
+        '200': {$ref: '#/components/responses/PrometheusResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '502': {$ref: '#/components/responses/BackendFailure'}
+        '503': {$ref: '#/components/responses/BackendFailure'}
+        '508': {$ref: '#/components/responses/LoopDetected'}
+    post:
+      operationId: prometheusRangeQueryForm
+      description: Form-encoded equivalent of prometheusRangeQuery for Grafana compatibility.
+      parameters: [{$ref: '#/components/parameters/RequiredCluster'}]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [query, start, end, step]
+              properties:
+                query: {type: string, minLength: 1, maxLength: 16384}
+                start: {type: string}
+                end: {type: string}
+                step: {type: string}
+                timeout: {type: string}
+      responses:
+        '200': {$ref: '#/components/responses/PrometheusResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '502': {$ref: '#/components/responses/BackendFailure'}
+        '503': {$ref: '#/components/responses/BackendFailure'}
+        '508': {$ref: '#/components/responses/LoopDetected'}
+        '415': {$ref: '#/components/responses/UnsupportedMediaType'}
+  /live/metrics/prometheus/{cluster}/api/v1/labels:
+    get:
+      operationId: prometheusLabels
+      parameters:
+        - {$ref: '#/components/parameters/RequiredCluster'}
+        - {name: 'match[]', in: query, schema: {type: array, maxItems: 20, items: {type: string, minLength: 1, maxLength: 4096}}}
+        - {name: start, in: query, schema: {type: string}, description: Defaults to one hour before end}
+        - {name: end, in: query, schema: {type: string}, description: Defaults to now}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 10000, default: 1000}}
+      responses: {'200': {$ref: '#/components/responses/PrometheusResponse'}, '400': {$ref: '#/components/responses/BadRequest'}, '401': {$ref: '#/components/responses/Unauthorized'}, '404': {$ref: '#/components/responses/NotFound'}, '429': {$ref: '#/components/responses/TooManyRequests'}, '502': {$ref: '#/components/responses/BackendFailure'}, '503': {$ref: '#/components/responses/BackendFailure'}, '508': {$ref: '#/components/responses/LoopDetected'}}
+    post:
+      operationId: prometheusLabelsForm
+      parameters: [{$ref: '#/components/parameters/RequiredCluster'}]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                'match[]': {type: array, maxItems: 20, items: {type: string, minLength: 1, maxLength: 4096}}
+                start: {type: string}
+                end: {type: string}
+                limit: {type: integer, minimum: 1, maximum: 10000, default: 1000}
+      responses: {'200': {$ref: '#/components/responses/PrometheusResponse'}, '400': {$ref: '#/components/responses/BadRequest'}, '401': {$ref: '#/components/responses/Unauthorized'}, '404': {$ref: '#/components/responses/NotFound'}, '415': {$ref: '#/components/responses/UnsupportedMediaType'}, '429': {$ref: '#/components/responses/TooManyRequests'}, '502': {$ref: '#/components/responses/BackendFailure'}, '503': {$ref: '#/components/responses/BackendFailure'}, '508': {$ref: '#/components/responses/LoopDetected'}}
+  /live/metrics/prometheus/{cluster}/api/v1/label/{label}/values:
+    get:
+      operationId: prometheusLabelValues
+      parameters:
+        - {$ref: '#/components/parameters/RequiredCluster'}
+        - {name: label, in: path, required: true, schema: {type: string, pattern: '^[a-zA-Z_:][a-zA-Z0-9_:]*$'}}
+        - {name: 'match[]', in: query, schema: {type: array, maxItems: 20, items: {type: string, minLength: 1, maxLength: 4096}}}
+        - {name: start, in: query, schema: {type: string}, description: Defaults to one hour before end}
+        - {name: end, in: query, schema: {type: string}, description: Defaults to now}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 10000, default: 1000}}
+      responses: {'200': {$ref: '#/components/responses/PrometheusResponse'}, '400': {$ref: '#/components/responses/BadRequest'}, '401': {$ref: '#/components/responses/Unauthorized'}, '404': {$ref: '#/components/responses/NotFound'}, '429': {$ref: '#/components/responses/TooManyRequests'}, '502': {$ref: '#/components/responses/BackendFailure'}, '503': {$ref: '#/components/responses/BackendFailure'}, '508': {$ref: '#/components/responses/LoopDetected'}}
+  /live/metrics/prometheus/{cluster}/api/v1/series:
+    get:
+      operationId: prometheusSeries
+      parameters:
+        - {$ref: '#/components/parameters/RequiredCluster'}
+        - {name: 'match[]', in: query, required: true, schema: {type: array, minItems: 1, maxItems: 20, items: {type: string, minLength: 1, maxLength: 4096}}}
+        - {name: start, in: query, required: true, schema: {type: string}}
+        - {name: end, in: query, required: true, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 10000, default: 1000}}
+      responses: {'200': {$ref: '#/components/responses/PrometheusResponse'}, '400': {$ref: '#/components/responses/BadRequest'}, '401': {$ref: '#/components/responses/Unauthorized'}, '404': {$ref: '#/components/responses/NotFound'}, '429': {$ref: '#/components/responses/TooManyRequests'}, '502': {$ref: '#/components/responses/BackendFailure'}, '503': {$ref: '#/components/responses/BackendFailure'}, '508': {$ref: '#/components/responses/LoopDetected'}}
+    post:
+      operationId: prometheusSeriesForm
+      parameters: [{$ref: '#/components/parameters/RequiredCluster'}]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              additionalProperties: false
+              required: ['match[]', start, end]
+              properties:
+                'match[]': {type: array, minItems: 1, maxItems: 20, items: {type: string, minLength: 1, maxLength: 4096}}
+                start: {type: string}
+                end: {type: string}
+                limit: {type: integer, minimum: 1, maximum: 10000, default: 1000}
+      responses: {'200': {$ref: '#/components/responses/PrometheusResponse'}, '400': {$ref: '#/components/responses/BadRequest'}, '401': {$ref: '#/components/responses/Unauthorized'}, '404': {$ref: '#/components/responses/NotFound'}, '415': {$ref: '#/components/responses/UnsupportedMediaType'}, '429': {$ref: '#/components/responses/TooManyRequests'}, '502': {$ref: '#/components/responses/BackendFailure'}, '503': {$ref: '#/components/responses/BackendFailure'}, '508': {$ref: '#/components/responses/LoopDetected'}}
+  /live/metrics/prometheus/{cluster}/api/v1/metadata:
+    get:
+      operationId: prometheusMetadata
+      parameters:
+        - {$ref: '#/components/parameters/RequiredCluster'}
+        - {name: metric, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 10000, default: 1000}}
+        - {name: limit_per_metric, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 10}}
+      responses: {'200': {$ref: '#/components/responses/PrometheusResponse'}, '400': {$ref: '#/components/responses/BadRequest'}, '401': {$ref: '#/components/responses/Unauthorized'}, '404': {$ref: '#/components/responses/NotFound'}, '429': {$ref: '#/components/responses/TooManyRequests'}, '502': {$ref: '#/components/responses/BackendFailure'}, '503': {$ref: '#/components/responses/BackendFailure'}, '508': {$ref: '#/components/responses/LoopDetected'}}
+  /live/metrics/prometheus/{cluster}/api/v1/status/buildinfo:
+    get:
+      operationId: prometheusBuildInfo
+      description: Read-only backend capability response used by Grafana datasource health checks.
+      parameters: [{$ref: '#/components/parameters/RequiredCluster'}]
+      responses: {'200': {$ref: '#/components/responses/PrometheusResponse'}, '400': {$ref: '#/components/responses/BadRequest'}, '401': {$ref: '#/components/responses/Unauthorized'}, '404': {$ref: '#/components/responses/NotFound'}, '429': {$ref: '#/components/responses/TooManyRequests'}, '502': {$ref: '#/components/responses/BackendFailure'}, '503': {$ref: '#/components/responses/BackendFailure'}, '508': {$ref: '#/components/responses/LoopDetected'}}
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer}
+  responses:
+    BadRequest:
+      description: Request validation failed
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Unauthorized:
+      description: Missing or invalid role token
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    NotFound:
+      description: Requested resource does not exist
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Conflict:
+      description: Request conflicts with the addressed cluster or current generation
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    UnsupportedMediaType:
+      description: POST body is not application/x-www-form-urlencoded
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    PayloadTooLarge:
+      description: A bounded live response exceeded its maximum size
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    LoopDetected:
+      description: A federated request attempted a second federation hop
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    TooManyRequests:
+      description: Rate or concurrency limit exceeded
+      headers: {Retry-After: {schema: {type: integer, minimum: 1}}}
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    BackendFailure:
+      description: PostgreSQL or a live/federated backend failed
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    PrometheusResponse:
+      description: Size-bounded unmodified Prometheus-compatible JSON response
+      content: {application/json: {schema: {$ref: '#/components/schemas/PrometheusResponse'}}}
+  parameters:
+    RequiredCluster: {name: cluster, in: path, required: true, schema: {type: string}}
+    Cluster: {name: cluster, in: query, schema: {type: string, maxLength: 253, pattern: '^[A-Za-z0-9_.-]+$'}}
+    Group: {name: group, in: query, schema: {type: string, maxLength: 512}}
+    Version: {name: version, in: query, schema: {type: string, maxLength: 512}}
+    Kind: {name: kind, in: query, schema: {type: string, maxLength: 128}}
+    Namespace: {name: namespace, in: query, schema: {type: string, maxLength: 253}}
+  schemas:
+    PrometheusResponse:
+      type: object
+      required: [status]
+      properties:
+        status: {type: string, enum: [success, error]}
+        data: {}
+        errorType: {type: string}
+        error: {type: string}
+        warnings: {type: array, items: {type: string}}
+        infos: {type: array, items: {type: string}}
+    Error:
+      type: object
+      required: [error]
+      additionalProperties: false
+      properties:
+        error: {type: string}
+    BusinessProcessSummary:
+      type: object
+      required: [name, generation, updatedAt]
+      additionalProperties: false
+      properties:
+        name: {type: string}
+        generation: {type: integer, format: int64, minimum: 1}
+        updatedAt: {type: string, format: date-time}
+    BusinessProcess:
+      type: object
+      required: [name, definition, generation, updatedAt]
+      additionalProperties: false
+      properties:
+        name: {type: string}
+        definition: {$ref: '#/components/schemas/BusinessProcessDefinition'}
+        generation: {type: integer, format: int64, minimum: 1}
+        updatedAt: {type: string, format: date-time}
+    BusinessProcessDefinition:
+      type: object
+      required: [version, metadata, nodes, roots]
+      additionalProperties: false
+      properties:
+        version: {type: integer, enum: [2]}
+        metadata: {type: object, additionalProperties: {type: string, maxLength: 4096}}
+        nodes: {type: array, maxItems: 10000, items: {$ref: '#/components/schemas/BusinessProcessNode'}}
+        roots: {type: array, maxItems: 10000, uniqueItems: true, items: {type: string, minLength: 1, maxLength: 512}}
+    BusinessProcessOperator:
+      oneOf:
+        - {type: string, enum: ['&', '|', '^', '!', '%']}
+        - {type: string, pattern: '^[1-9][0-9]{0,3}$|^10000$'}
+        - {type: integer, minimum: 1, maximum: 10000}
+    BusinessProcessNode:
+      oneOf:
+        - {$ref: '#/components/schemas/BusinessProcessProcessNode'}
+        - {$ref: '#/components/schemas/BusinessProcessKubernetesNode'}
+        - {$ref: '#/components/schemas/BusinessProcessSelectorNode'}
+        - {$ref: '#/components/schemas/BusinessProcessImportedNode'}
+    BusinessProcessProcessNode:
+      type: object
+      required: [type, name]
+      additionalProperties: false
+      properties:
+        type: {type: string, enum: [process]}
+        name: {type: string, minLength: 1, maxLength: 512}
+        operator: {$ref: '#/components/schemas/BusinessProcessOperator'}
+        children: {type: array, maxItems: 10000, uniqueItems: true, items: {type: string, minLength: 1, maxLength: 512}}
+        display: {type: integer}
+        alias: {type: string}
+        infoUrl: {type: string}
+        stateOverrides: {oneOf: [{type: object, additionalProperties: true}, {type: array, items: {}}]}
+        publicStatus: {type: boolean}
+    BusinessProcessKubernetesNode:
+      type: object
+      required: [type, name, kind, uuid, cluster, group, version, apiKind]
+      additionalProperties: false
+      properties:
+        type: {type: string, enum: [kubernetes]}
+        name: {type: string, minLength: 1, maxLength: 512}
+        operator: {$ref: '#/components/schemas/BusinessProcessOperator'}
+        children: {type: array, maxItems: 10000, uniqueItems: true, items: {type: string, minLength: 1, maxLength: 512}}
+        display: {type: integer}
+        alias: {type: string}
+        infoUrl: {type: string}
+        stateOverrides: {oneOf: [{type: object, additionalProperties: true}, {type: array, items: {}}]}
+        publicStatus: {type: boolean}
+        kind: {type: string, minLength: 1, maxLength: 128}
+        uuid: {type: string, format: uuid}
+        cluster: {type: string, minLength: 1, maxLength: 253, pattern: '^[A-Za-z0-9_.-]+$'}
+        group: {type: string, maxLength: 512}
+        version: {type: string, minLength: 1, maxLength: 512}
+        apiKind: {type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z][A-Za-z0-9]*$'}
+        expandDependencies: {type: boolean}
+        namespaceInclude:
+          type: array
+          maxItems: 7
+          uniqueItems: true
+          items: {type: string, enum: [deployment, statefulset, daemonset, cronjob, standalone_job, standalone_replicaset, standalone_pod]}
+    BusinessProcessSelectorNode:
+      type: object
+      required: [type, name, selector]
+      additionalProperties: false
+      properties:
+        type: {type: string, enum: [kubernetes-selector]}
+        name: {type: string, minLength: 1, maxLength: 512}
+        operator: {$ref: '#/components/schemas/BusinessProcessOperator'}
+        children: {type: array, maxItems: 10000, uniqueItems: true, items: {type: string, minLength: 1, maxLength: 512}}
+        display: {type: integer}
+        alias: {type: string}
+        infoUrl: {type: string}
+        stateOverrides: {oneOf: [{type: object, additionalProperties: true}, {type: array, items: {}}]}
+        publicStatus: {type: boolean}
+        selector: {$ref: '#/components/schemas/BusinessProcessSelector'}
+        aggregation: {type: string, enum: [and, or, worst]}
+    BusinessProcessSelector:
+      type: object
+      additionalProperties: false
+      properties:
+        cluster: {type: string, maxLength: 512}
+        group: {type: string, maxLength: 512}
+        version: {type: string, maxLength: 512}
+        kind: {type: string, maxLength: 512}
+        namespace: {type: string, maxLength: 512}
+        name: {type: string, maxLength: 512}
+        labels: {type: string, maxLength: 4096}
+        ownerUID: {type: string, maxLength: 512}
+        states: {type: array, maxItems: 4, uniqueItems: true, items: {type: string, enum: [ok, warning, critical, unknown]}}
+    BusinessProcessImportedNode:
+      type: object
+      required: [type, name, config, node]
+      additionalProperties: false
+      properties:
+        type: {type: string, enum: [imported]}
+        name: {type: string, minLength: 1, maxLength: 512}
+        config: {type: string, minLength: 1, maxLength: 512}
+        node: {type: string, minLength: 1, maxLength: 512}
+    Resource:
+      type: object
+      additionalProperties: false
+      required: [id, cluster, uid, group, version, kind, name, resourceVersion, state, observedAt]
+      properties:
+        id: {type: string, format: uuid}
+        cluster: {type: string, minLength: 1, maxLength: 253}
+        uid: {type: string, minLength: 1, maxLength: 512}
+        group: {type: string, maxLength: 512}
+        version: {type: string, minLength: 1, maxLength: 512}
+        kind: {type: string, minLength: 1, maxLength: 512}
+        namespace: {type: string, maxLength: 253}
+        name: {type: string, minLength: 1, maxLength: 512}
+        resourceVersion: {type: string, minLength: 1, maxLength: 512}
+        labels: {type: object, maxProperties: 256, additionalProperties: {type: string, maxLength: 256}}
+        annotations: {type: object, maxProperties: 256, additionalProperties: {type: string, maxLength: 4096}}
+        owners: {type: array, maxItems: 64, items: {$ref: '#/components/schemas/Owner'}}
+        conditions: {type: array, maxItems: 64, items: {$ref: '#/components/schemas/Condition'}}
+        summary: {type: object, maxProperties: 64, additionalProperties: true}
+        state: {type: string, enum: [ok, warning, critical, unknown]}
+        reason: {type: string, maxLength: 4096}
+        observedAt: {type: string, format: date-time}
+        deletedAt: {type: string, format: date-time, nullable: true}
+        freshness: {type: string, enum: [live, stale, unavailable]}
+    ResourceMetrics:
+      type: object
+      additionalProperties: false
+      required: [resourceId, cluster, source, start, end, stepSeconds, metrics, freshness]
+      properties:
+        resourceId: {type: string, format: uuid}
+        cluster: {type: string}
+        source: {type: string, enum: [cluster-monitoring-live]}
+        start: {type: string, format: date-time}
+        end: {type: string, format: date-time}
+        stepSeconds: {type: integer, minimum: 15, maximum: 300}
+        metrics:
+          type: array
+          maxItems: 64
+          items: {$ref: '#/components/schemas/ResourceMetric'}
+        freshness: {type: string, enum: [live, stale, unavailable]}
+    ResourceWithFreshness:
+      allOf:
+        - {$ref: '#/components/schemas/Resource'}
+        - type: object
+          required: [freshness]
+    ResourceGraph:
+      type: object
+      additionalProperties: false
+      required: [children, depth, snapshot, freshness]
+      properties:
+        children:
+          type: object
+          additionalProperties:
+            type: array
+            items: {$ref: '#/components/schemas/ResourceWithFreshness'}
+        depth: {type: integer, enum: [1]}
+        snapshot: {type: string, format: date-time}
+        freshness: {type: string, enum: [live, stale, unavailable]}
+    ResourceMetric:
+      type: object
+      additionalProperties: false
+      required: [key, label, unit]
+      properties:
+        key: {type: string, pattern: '^[a-z][a-z0-9_]{0,63}$'}
+        label: {type: string, minLength: 1, maxLength: 128}
+        unit: {type: string, minLength: 1, maxLength: 64}
+        data: {type: object, additionalProperties: true}
+        error: {type: string}
+    BranchStatusPage:
+      type: object
+      additionalProperties: false
+      required: [items, transitive]
+      properties:
+        items: {type: array, maxItems: 64, items: {$ref: '#/components/schemas/BranchStatus'}}
+        transitive: {type: boolean, enum: [false]}
+    BranchStatus:
+      type: object
+      additionalProperties: false
+      required: [name, freshness]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 253}
+        freshness: {type: string, enum: [live, unavailable]}
+        latency: {type: string, maxLength: 64}
+    BranchInventoryPage:
+      type: object
+      additionalProperties: false
+      required: [items, transitive]
+      properties:
+        items: {type: array, maxItems: 64, items: {$ref: '#/components/schemas/BranchInventoryItem'}}
+        transitive: {type: boolean, enum: [false]}
+    BranchInventoryItem:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 253}
+    Owner:
+      type: object
+      additionalProperties: false
+      required: [uid, kind, name]
+      properties:
+        uid: {type: string, minLength: 1, maxLength: 512}
+        apiVersion: {type: string, maxLength: 512}
+        kind: {type: string, minLength: 1, maxLength: 512}
+        name: {type: string, minLength: 1, maxLength: 512}
+        controller: {type: boolean}
+    Condition:
+      type: object
+      additionalProperties: false
+      required: [type, status]
+      properties:
+        type: {type: string, minLength: 1, maxLength: 512}
+        status: {type: string, minLength: 1, maxLength: 512}
+        reason: {type: string, maxLength: 1024}
+        message: {type: string, maxLength: 4096}
+        lastTransitionTime: {type: string, format: date-time}
+    ResourcePage:
+      type: object
+      required: [items, snapshot, freshness]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Resource'}}
+        nextCursor: {type: string, maxLength: 4096, pattern: '^[A-Za-z0-9_-]+$'}
+        snapshot: {type: string, format: date-time}
+        freshness: {type: string, enum: [live, stale, unavailable]}
+    ResourceTypePage:
+      type: object
+      additionalProperties: false
+      required: [items, cluster, freshness]
+      properties:
+        items: {type: array, maxItems: 4096, items: {$ref: '#/components/schemas/ResourceType'}}
+        cluster: {type: string, minLength: 1, maxLength: 253}
+        freshness: {type: string, enum: [live, stale, unavailable]}
+    ResourceType:
+      type: object
+      additionalProperties: false
+      required: [group, version, kind, count]
+      properties:
+        group: {type: string, maxLength: 512}
+        version: {type: string, minLength: 1, maxLength: 512}
+        kind: {type: string, minLength: 1, maxLength: 512}
+        count: {type: integer, format: int64, minimum: 1}
+    Selector:
+      type: object
+      additionalProperties: false
+      properties:
+        cluster: {type: string, maxLength: 512}
+        group: {type: string, maxLength: 512}
+        version: {type: string, maxLength: 512}
+        kind: {type: string, maxLength: 512}
+        namespace: {type: string, maxLength: 512}
+        name: {type: string, maxLength: 512}
+        labels: {type: string, maxLength: 4096}
+        ownerUID: {type: string, maxLength: 512}
+        states: {type: array, maxItems: 4, uniqueItems: true, items: {type: string, enum: [ok, warning, critical, unknown]}}
+        aggregation: {type: string, enum: [and, or, worst], default: worst}
+    SelectorResult:
+      type: object
+      required: [items, state, snapshot, freshness]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Resource'}}
+        matchedCount: {type: integer, format: int64}
+        state: {type: string, enum: [ok, warning, critical, unknown]}
+        snapshot: {type: string, format: date-time}
+        freshness: {type: string, enum: [live, stale, unavailable]}
+    IngestBatch:
+      type: object
+      additionalProperties: false
+      required: [cluster, shard, events]
+      properties:
+        cluster: {type: string}
+        shard: {type: string}
+        events:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items:
+            type: object
+            additionalProperties: false
+            required: [eventId, action, resource]
+            properties:
+              eventId: {type: string, format: uuid}
+              action: {type: string, enum: [upsert, delete, reconcile, heartbeat]}
+              resource: {$ref: '#/components/schemas/Resource'}
+    Status:
+      type: object
+      additionalProperties: false
+      required: [cluster, database, pendingEvents, freshness]
+      properties:
+        cluster: {type: string}
+        database: {type: string}
+        oldestPendingEvent: {type: string, format: date-time, nullable: true}
+        pendingEvents: {type: integer}
+        lastAppliedAt: {type: string, format: date-time, nullable: true}
+        freshness: {type: string, enum: [live, stale, unavailable]}
