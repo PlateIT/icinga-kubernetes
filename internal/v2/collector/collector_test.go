@@ -31,6 +31,35 @@ import (
 	"k8s.io/client-go/tools/leaderelection"
 )
 
+func TestSnapshotRefreshesUnchangedObjectsBeforeReconciliation(t *testing.T) {
+	c := &Collector{cfg: config.Config{ClusterName: "test"}, adapters: adapter.New()}
+	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"}
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apps/v1", "kind": "StatefulSet",
+		"metadata": map[string]any{"name": "database", "namespace": "test", "uid": "same-uid", "resourceVersion": "123"},
+	}}
+	seen := map[string]bool{}
+	var observed time.Time
+	for i := 0; i < 2; i++ {
+		started := time.Now().UTC()
+		event := c.snapshotEvent(gvr, obj, started)
+		if !seen[event.EventID] {
+			seen[event.EventID] = true
+			observed = event.Resource.ObservedAt
+		}
+		if observed.Before(started) {
+			t.Fatal("unchanged live object would be tombstoned by the next reconciliation")
+		}
+		if retry := c.snapshotEvent(gvr, obj, started); retry.EventID != event.EventID {
+			t.Fatal("retry of the same snapshot must remain idempotent")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if len(seen) != 2 {
+		t.Fatal("each snapshot must refresh an unchanged object")
+	}
+}
+
 func TestRunLeaderElectionRejectsInvalidConfigurationWithoutPanic(t *testing.T) {
 	err := runLeaderElection(context.Background(), leaderelection.LeaderElectionConfig{})
 	if err == nil || !strings.Contains(err.Error(), "leaseDuration must be greater than renewDeadline") {
