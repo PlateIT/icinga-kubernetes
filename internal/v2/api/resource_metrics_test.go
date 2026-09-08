@@ -76,6 +76,31 @@ func TestDefaultResourceMetricsCoverCoreWorkloads(t *testing.T) {
 	}
 }
 
+func TestExtendedMetricsUseOwnerIdentityAndContainerDimensions(t *testing.T) {
+	pod := defaultResourceMetrics(model.Resource{Group: "core", Kind: "Pod", Namespace: "team", Name: "demo"})
+	if len(pod) < 15 {
+		t.Fatalf("only %d pod metrics", len(pod))
+	}
+	for _, kind := range []string{"Deployment", "ReplicaSet", "StatefulSet", "DaemonSet"} {
+		seen := map[string]bool{}
+		for _, metric := range defaultResourceMetrics(model.Resource{Group: "apps", Kind: kind, Namespace: "team", Name: "demo"}) {
+			if seen[metric.Key] {
+				t.Fatalf("duplicate metric %s", metric.Key)
+			}
+			seen[metric.Key] = true
+			if metric.Key == "cpu" && (!strings.Contains(metric.query, "kube_pod_owner") || strings.Contains(metric.query, "pod=~")) {
+				t.Fatalf("ambiguous workload ownership: %s", metric.query)
+			}
+		}
+		if !seen["cpu"] || !seen["memory"] || !seen["restarts"] {
+			t.Fatalf("missing workload metrics: %s", kind)
+		}
+	}
+	if len(defaultResourceMetrics(model.Resource{Group: "example.io", Kind: "Pod"})) != 0 {
+		t.Fatal("custom Pod kind must not inherit core metrics")
+	}
+}
+
 func TestOpenShiftMetricsUseDocumentedLabels(t *testing.T) {
 	tests := []struct {
 		resource model.Resource

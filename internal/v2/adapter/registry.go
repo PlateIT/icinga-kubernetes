@@ -218,6 +218,11 @@ func (r *Registry) Describe(gvr schema.GroupVersionResource, obj *unstructured.U
 		}
 	}
 	phase, _, _ := unstructured.NestedString(obj.Object, "status", "phase")
+	if selected.Name == "generic" {
+		if state, reason, handled := describeNative(gvr.Group, obj, conditions, summary); handled {
+			return state, reason, summary
+		}
+	}
 	for _, bad := range selected.CriticalPhases {
 		if strings.EqualFold(phase, bad) {
 			return model.StateCritical, phase, summary

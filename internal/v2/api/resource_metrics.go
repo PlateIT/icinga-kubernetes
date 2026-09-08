@@ -149,6 +149,10 @@ func boundedInt64(value string, fallback, minimum, maximum int64) (int64, error)
 }
 
 func defaultResourceMetrics(resource model.Resource) []resourceMetric {
+	return append(baseResourceMetrics(resource), extendedResourceMetrics(resource)...)
+}
+
+func baseResourceMetrics(resource model.Resource) []resourceMetric {
 	expectedGroups := map[string]string{
 		"Pod": "core", "Node": "core", "Namespace": "core", "PersistentVolumeClaim": "core", "Service": "core",
 		"Deployment": "apps", "ReplicaSet": "apps", "StatefulSet": "apps", "DaemonSet": "apps",
@@ -161,7 +165,6 @@ func defaultResourceMetrics(resource model.Resource) []resourceMetric {
 	}
 	namespace := prometheusQuote(resource.Namespace)
 	name := prometheusQuote(resource.Name)
-	podPrefix := prometheusQuote(regexp.QuoteMeta(resource.Name) + "-.*")
 	metric := func(key, label, unit, query string) resourceMetric {
 		return resourceMetric{Key: key, Label: label, Unit: unit, query: query}
 	}
@@ -217,8 +220,6 @@ func defaultResourceMetrics(resource model.Resource) []resourceMetric {
 			metric("desired", "Desired replicas", "count", `kube_statefulset_replicas{`+selector+`}`),
 			metric("ready", "Ready replicas", "count", `kube_statefulset_status_replicas_ready{`+selector+`}`),
 			metric("current", "Current replicas", "count", `kube_statefulset_status_replicas_current{`+selector+`}`),
-			metric("cpu", "CPU", "cores", `sum(rate(container_cpu_usage_seconds_total{namespace=`+namespace+`,pod=~`+podPrefix+`,container!=""}[5m]))`),
-			metric("memory", "Memory", "bytes", `sum(container_memory_working_set_bytes{namespace=`+namespace+`,pod=~`+podPrefix+`,container!=""})`),
 		}
 	case "DaemonSet":
 		selector := `namespace=` + namespace + `,daemonset=` + name

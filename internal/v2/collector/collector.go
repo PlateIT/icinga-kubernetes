@@ -694,7 +694,9 @@ func (c *Collector) flush(ctx context.Context, target shard, events []model.Inge
 
 func (c *Collector) event(action string, gvr schema.GroupVersionResource, obj *unstructured.Unstructured) model.IngestEvent {
 	r := normalizeWithRegistry(c.cfg.ClusterName, gvr, obj, c.adapters)
-	id := uuid.NewSHA1(uuid.NameSpaceOID, []byte(c.cfg.ClusterName+"\x00"+gvr.String()+"\x00"+string(obj.GetUID())+"\x00"+obj.GetResourceVersion()+"\x00"+action))
+	// Bump this projection version when normalization semantics change so that
+	// an initial list refreshes existing resources even at the same Kubernetes RV.
+	id := uuid.NewSHA1(uuid.NameSpaceOID, []byte("projection-v2\x00"+c.cfg.ClusterName+"\x00"+gvr.String()+"\x00"+string(obj.GetUID())+"\x00"+obj.GetResourceVersion()+"\x00"+action))
 	return model.IngestEvent{EventID: id.String(), Action: action, Resource: r}
 }
 
@@ -725,6 +727,9 @@ func normalizeWithRegistry(cluster string, gvr schema.GroupVersionResource, obj 
 			continue
 		}
 		condition := model.Condition{Type: truncate(text(m["type"]), 512), Status: truncate(text(m["status"]), 512), Reason: truncate(text(m["reason"]), 1024), Message: truncate(text(m["message"]), 4096)}
+		if stamp, err := time.Parse(time.RFC3339, text(m["lastTransitionTime"])); err == nil {
+			condition.LastTransitionTime = &stamp
+		}
 		if condition.Type == "" || condition.Status == "" {
 			continue
 		}
