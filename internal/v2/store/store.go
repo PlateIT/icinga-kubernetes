@@ -548,7 +548,7 @@ func buildResourceFilter(f ListFilter, includeCursor bool) ([]any, []string, err
 	args := []any{}
 	where := []string{"r.deleted_at IS NULL"}
 	if f.HideZeroReplicaSets {
-		where = append(where, "NOT (r.api_group='apps' AND r.kind='ReplicaSet' AND COALESCE(r.summary->>'spec.replicas','')='0')")
+		where = append(where, "NOT (r.api_group='apps' AND r.kind='ReplicaSet' AND COALESCE(r.summary->>'spec.replicas','')='0' AND COALESCE(r.summary->>'status.readyReplicas','0')='0' AND COALESCE(r.summary->>'status.availableReplicas','0')='0')")
 	}
 	add := func(column, value string) {
 		if value != "" {
