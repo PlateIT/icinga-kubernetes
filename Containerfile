@@ -17,6 +17,7 @@ FROM base AS build
 RUN --mount=target=. \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go test ./internal/v2/notifier ./internal/v2/config ./internal/v2/adapter ./internal/v2/api ./internal/v2/collector && \
     CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' -o /icinga-kubernetes ./cmd/icinga-kubernetes/main.go
 
 FROM scratch
@@ -33,7 +34,7 @@ EOF
 
 COPY --from=base /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
-COPY --from=build /icinga-kubernetes /icinga-kubernetes
+COPY --chmod=755 --from=build /icinga-kubernetes /icinga-kubernetes
 
 USER icinga
 
