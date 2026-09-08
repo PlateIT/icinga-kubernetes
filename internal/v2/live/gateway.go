@@ -168,6 +168,11 @@ func (g *Gateway) MetricsProxy(ctx context.Context, method, path string, request
 	if err != nil {
 		return nil, err
 	}
+	if g.cfg.MetricsNamespace != "" {
+		query := req.URL.Query()
+		query.Set("namespace", g.cfg.MetricsNamespace)
+		req.URL.RawQuery = query.Encode()
+	}
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}

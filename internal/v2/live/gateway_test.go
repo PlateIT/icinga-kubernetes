@@ -56,3 +56,17 @@ func TestMetricsProxyRejectsOversizedResponse(t *testing.T) {
 		t.Fatalf("oversized response result: %v", err)
 	}
 }
+
+func TestMetricsNamespaceIsFixedByConfiguration(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("namespace") != "demo" || r.URL.Query().Get("query") != "up" {
+			t.Errorf("unexpected tenant query: %s", r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`{"status":"success","data":{}}`))
+	}))
+	defer upstream.Close()
+	gateway := &Gateway{cfg: config.Config{MetricsURL: upstream.URL, MetricsNamespace: "demo"}, http: upstream.Client()}
+	if _, err := gateway.MetricsProxy(context.Background(), http.MethodGet, "/api/v1/query?query=up&namespace=other", nil, ""); err != nil {
+		t.Fatal(err)
+	}
+}

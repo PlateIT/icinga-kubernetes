@@ -37,6 +37,7 @@ type Config struct {
 	AdapterFile               string
 	ResyncFile                string
 	MetricsURL                string
+	MetricsNamespace          string
 	MetricsTokenFile          string
 	MetricsCAFile             string
 	MetricsInsecure           bool
@@ -84,6 +85,7 @@ func Load() (Config, error) {
 		AdapterFile:               value("ICINGA_KUBERNETES_ADAPTER_FILE", "/etc/icinga-kubernetes/adapters.json"),
 		ResyncFile:                value("ICINGA_KUBERNETES_RESYNC_FILE", "/etc/icinga-kubernetes/resync.json"),
 		MetricsURL:                strings.TrimRight(os.Getenv("ICINGA_KUBERNETES_METRICS_URL"), "/"),
+		MetricsNamespace:          os.Getenv("ICINGA_KUBERNETES_METRICS_NAMESPACE"),
 		MetricsTokenFile:          os.Getenv("ICINGA_KUBERNETES_METRICS_TOKEN_FILE"),
 		MetricsCAFile:             os.Getenv("ICINGA_KUBERNETES_METRICS_CA_FILE"),
 		MetricsInsecure:           boolean("ICINGA_KUBERNETES_METRICS_INSECURE", false),
