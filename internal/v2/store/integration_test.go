@@ -236,6 +236,9 @@ func TestPostgreSQLLifecycle(t *testing.T) {
 		t.Fatalf("resource type inventory=%#v err=%v", types, err)
 	}
 	for _, name := range []string{"demo-a", "demo-z"} {
+		if hidden, err := s.ResourceTypes(ctx, cluster, ListFilter{Namespace: "not-visible"}); err != nil || len(hidden) != 0 {
+			t.Fatalf("inventory leaked resources outside namespace: %#v err=%v", hidden, err)
+		}
 		candidate := resource
 		candidate.UID = uuid.NewString()
 		candidate.ID = model.StableID(cluster, candidate.UID)

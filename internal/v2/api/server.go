@@ -1131,6 +1131,11 @@ func validateResourceListQuery(q url.Values) error {
 }
 
 func (s *Server) resourceTypes(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	if err := validateResourceListQuery(q); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
 	cluster := r.URL.Query().Get("cluster")
 	if cluster == "" {
 		cluster = s.Config.ClusterName
@@ -1142,7 +1147,16 @@ func (s *Server) resourceTypes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "unknown cluster")
 		return
 	}
-	items, err := s.Store.ResourceTypes(r.Context(), cluster)
+	labels, err := parseLabels(q.Get("labels"))
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	f := store.ListFilter{Cluster: cluster, Group: q.Get("group"), Version: q.Get("version"), Kind: q.Get("kind"), Namespace: q.Get("namespace"), Name: q.Get("name"), Labels: labels}
+	if state := q.Get("state"); state != "" {
+		f.States = []model.State{model.State(state)}
+	}
+	items, err := s.Store.ResourceTypes(r.Context(), cluster, f)
 	if err != nil {
 		s.fail(w, err)
 		return

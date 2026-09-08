@@ -65,9 +65,16 @@ paths:
   /resource-types:
     get:
       operationId: listResourceTypes
-      description: Lists bounded GVK facets present in the selected local or directly federated cluster inventory.
+      description: Lists bounded GVK facets from the PostgreSQL inventory, applying exact resource filters before counting; deleted objects are excluded.
       parameters:
         - {$ref: '#/components/parameters/Cluster'}
+        - {$ref: '#/components/parameters/Group'}
+        - {$ref: '#/components/parameters/Version'}
+        - {$ref: '#/components/parameters/Kind'}
+        - {$ref: '#/components/parameters/Namespace'}
+        - {name: name, in: query, schema: {type: string, maxLength: 512}}
+        - {name: labels, in: query, schema: {type: string, maxLength: 4096}}
+        - {name: state, in: query, schema: {type: string, enum: [ok, warning, critical, unknown]}}
       responses:
         '200':
           description: Resource type inventory

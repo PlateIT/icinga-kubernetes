@@ -43,13 +43,22 @@ type ResourceType struct {
 	Count   int64  `json:"count"`
 }
 
-func (s Store) ResourceTypes(ctx context.Context, cluster string) ([]ResourceType, error) {
+func (s Store) ResourceTypes(ctx context.Context, cluster string, filters ...ListFilter) ([]ResourceType, error) {
 	if cluster == "" {
 		return nil, errors.New("cluster is required")
 	}
-	rows, err := s.DB.QueryContext(ctx, `SELECT api_group,api_version,kind,count(*)
-		FROM resource WHERE cluster_name=$1 AND deleted_at IS NULL
-		GROUP BY api_group,api_version,kind ORDER BY lower(kind),api_group,api_version LIMIT 4097`, cluster)
+	f := ListFilter{Cluster: cluster}
+	if len(filters) > 0 {
+		f = filters[0]
+		f.Cluster = cluster
+	}
+	args, where, err := buildResourceFilter(f, false)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.DB.QueryContext(ctx, `SELECT r.api_group,r.api_version,r.kind,count(*)
+		FROM resource r WHERE `+strings.Join(where, " AND ")+`
+		GROUP BY r.api_group,r.api_version,r.kind ORDER BY lower(r.kind),r.api_group,r.api_version LIMIT 4097`, args...)
 	if err != nil {
 		return nil, err
 	}
