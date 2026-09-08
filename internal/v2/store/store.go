@@ -21,6 +21,7 @@ var ErrGenerationConflict = errors.New("generation conflict")
 
 type ListFilter struct {
 	Cluster, Group, Version, Kind, Namespace, Name, NamePrefix string
+	NamePattern, EventForUID                                   string
 	Labels                                                     map[string]string
 	States                                                     []model.State
 	OwnerUID                                                   string
@@ -596,6 +597,15 @@ func buildResourceFilter(f ListFilter, includeCursor bool) ([]any, []string, err
 	add("r.kind", f.Kind)
 	add("r.namespace", f.Namespace)
 	add("r.name", f.Name)
+	if f.NamePattern != "" {
+		pattern := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`, "*", "%").Replace(strings.ToLower(f.NamePattern))
+		args = append(args, pattern)
+		where = append(where, fmt.Sprintf(`lower(r.name) LIKE $%d ESCAPE '\'`, len(args)))
+	}
+	if f.EventForUID != "" {
+		args = append(args, f.EventForUID)
+		where = append(where, fmt.Sprintf("r.kind='Event' AND COALESCE(r.summary->>'regarding.uid',r.summary->>'involvedObject.uid')=$%d", len(args)))
+	}
 	if f.NamePrefix != "" {
 		prefix := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(strings.ToLower(f.NamePrefix))
 		args = append(args, prefix+"%")

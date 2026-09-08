@@ -1090,7 +1090,7 @@ func (s *Server) resources(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
-	f := store.ListFilter{Cluster: cluster, Group: q.Get("group"), Version: q.Get("version"), Kind: q.Get("kind"), Namespace: q.Get("namespace"), Name: q.Get("name"), NamePrefix: q.Get("namePrefix"), OwnerUID: q.Get("ownerUID"), Labels: labels, Limit: limit, Cursor: q.Get("cursor"), OrderByID: q.Get("order") == "id"}
+	f := store.ListFilter{Cluster: cluster, Group: q.Get("group"), Version: q.Get("version"), Kind: q.Get("kind"), Namespace: q.Get("namespace"), Name: q.Get("name"), NamePrefix: q.Get("namePrefix"), NamePattern: q.Get("namePattern"), EventForUID: q.Get("eventForUID"), OwnerUID: q.Get("ownerUID"), Labels: labels, Limit: limit, Cursor: q.Get("cursor"), OrderByID: q.Get("order") == "id"}
 	if state := q.Get("state"); state != "" {
 		f.States = []model.State{model.State(state)}
 	}
@@ -1109,7 +1109,7 @@ func validateResourceListQuery(q url.Values) error {
 	maximums := map[string]int{
 		"hideZeroReplicaSets": 5,
 		"cluster":             253, "group": 512, "version": 512, "kind": 128,
-		"namespace": 253, "name": 512, "namePrefix": 512, "labels": 4096,
+		"namespace": 253, "name": 512, "namePrefix": 512, "namePattern": 512, "eventForUID": 512, "labels": 4096,
 		"state": 8, "limit": 4, "order": 2, "cursor": 4096, "ownerUID": 512,
 	}
 	for name, maximum := range maximums {

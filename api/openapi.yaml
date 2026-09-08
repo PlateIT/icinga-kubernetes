@@ -45,6 +45,8 @@ paths:
         - {$ref: '#/components/parameters/Namespace'}
         - {name: name, in: query, schema: {type: string, maxLength: 512}}
         - {name: namePrefix, in: query, description: Case-insensitive resource-name prefix; mutually exclusive with name, schema: {type: string, maxLength: 512}}
+        - {name: namePattern, in: query, description: 'Case-insensitive resource-name pattern; * matches any characters. Intersects exact name restrictions.', schema: {type: string, maxLength: 512}}
+        - {name: eventForUID, in: query, description: Events referencing this object UID within the selected cluster, schema: {type: string, maxLength: 512}}
         - {name: ownerUID, in: query, description: Direct children of this owner UID within the selected cluster, schema: {type: string, maxLength: 512}}
         - {name: labels, in: query, description: 'Exact Kubernetes label selector key=value[,key=value]', schema: {type: string, maxLength: 4096}}
         - {name: state, in: query, schema: {type: string, enum: [ok, warning, critical, unknown]}}

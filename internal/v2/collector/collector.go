@@ -726,6 +726,15 @@ func normalizeWithRegistry(cluster string, gvr schema.GroupVersionResource, obj 
 	}
 	conditions := []model.Condition{}
 	raw, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
+	if gvr.Group == "route.openshift.io" && obj.GetKind() == "Route" {
+		ingresses, _, _ := unstructured.NestedSlice(obj.Object, "status", "ingress")
+		for _, entry := range ingresses {
+			if ingress, ok := entry.(map[string]any); ok {
+				nested, _, _ := unstructured.NestedSlice(ingress, "conditions")
+				raw = append(raw, nested...)
+			}
+		}
+	}
 	for _, entry := range raw {
 		if len(conditions) == 64 {
 			break

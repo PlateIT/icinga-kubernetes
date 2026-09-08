@@ -240,6 +240,14 @@ func (r *Registry) Describe(gvr schema.GroupVersionResource, obj *unstructured.U
 			}
 		}
 	}
+	if selected.Name == "openshift-route" {
+		for _, c := range conditions {
+			if c.Type == "Admitted" && strings.EqualFold(c.Status, "True") {
+				return model.StateOK, "Route admitted by router", summary
+			}
+		}
+		return model.StateUnknown, "Route admission has not been confirmed", summary
+	}
 	statusObserved := false
 	warningReason := ""
 	for _, field := range selected.StatusFields {
@@ -296,8 +304,8 @@ func containsFold(values []string, candidate string) bool {
 
 func builtins() []Definition {
 	return []Definition{
-		{Name: "kubernetes-core-event", Group: "core", Kind: "Event", SummaryFields: []string{"type", "reason", "message", "count", "involvedObject.kind", "involvedObject.namespace", "involvedObject.name", "reportingComponent", "reportingInstance"}, StatusFields: []StatusField{{Path: "type", Healthy: []string{"Normal"}, Critical: []string{"Warning"}}}},
-		{Name: "kubernetes-events-event", Group: "events.k8s.io", Kind: "Event", SummaryFields: []string{"type", "reason", "note", "regarding.kind", "regarding.namespace", "regarding.name", "reportingController", "reportingInstance", "deprecatedCount"}, StatusFields: []StatusField{{Path: "type", Healthy: []string{"Normal"}, Critical: []string{"Warning"}}}},
+		{Name: "kubernetes-core-event", Group: "core", Kind: "Event", SummaryFields: []string{"type", "reason", "message", "count", "involvedObject.uid", "involvedObject.apiVersion", "involvedObject.fieldPath", "involvedObject.kind", "involvedObject.namespace", "involvedObject.name", "reportingComponent", "reportingInstance"}, StatusFields: []StatusField{{Path: "type", Healthy: []string{"Normal"}}}},
+		{Name: "kubernetes-events-event", Group: "events.k8s.io", Kind: "Event", SummaryFields: []string{"type", "reason", "note", "regarding.uid", "regarding.apiVersion", "regarding.fieldPath", "regarding.kind", "regarding.namespace", "regarding.name", "reportingController", "reportingInstance", "deprecatedCount"}, StatusFields: []StatusField{{Path: "type", Healthy: []string{"Normal"}}}},
 		{Name: "openshift-route", Group: "route.openshift.io", Kind: "Route", DescriptionFields: []string{"spec.host"}, HealthyConditions: []string{"Admitted"}},
 		{Name: "openshift-cluster-operator", Group: "config.openshift.io", Kind: "ClusterOperator", HealthyConditions: []string{"Available"}, CriticalConditions: []string{"Degraded"}},
 		{Name: "openshift-machine-config-pool", Group: "machineconfiguration.openshift.io", Kind: "MachineConfigPool", HealthyConditions: []string{"Updated"}, CriticalConditions: []string{"Degraded"}},
