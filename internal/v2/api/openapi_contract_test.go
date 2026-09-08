@@ -23,7 +23,8 @@ func TestOpenAPICoversEveryVersionedRouteAndMethod(t *testing.T) {
 		t.Fatal(err)
 	}
 	expected := map[string][]string{
-		"/health/live": {"get"}, "/health/ready": {"get"}, "/status": {"get"},
+		"/resource-namespaces": {"get"},
+		"/health/live":         {"get"}, "/health/ready": {"get"}, "/status": {"get"},
 		"/resources": {"get"}, "/resource-types": {"get"}, "/resources/batch-get": {"post"}, "/selectors/resolve": {"post"},
 		"/graph/resolve": {"post"}, "/branches/status": {"get"}, "/branches": {"get"}, "/ingest": {"post"},
 		"/events/stream": {"get"}, "/business-processes": {"get"},

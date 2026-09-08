@@ -89,6 +89,34 @@ paths:
         '500': {$ref: '#/components/responses/BackendFailure'}
         '503': {$ref: '#/components/responses/BackendFailure'}
         '508': {$ref: '#/components/responses/LoopDetected'}
+  /resource-namespaces:
+    get:
+      operationId: listResourceNamespaces
+      description: Lists up to 4096 distinct namespaces of matching non-deleted inventory resources, without requiring collected Namespace objects. Uses the same reader authorization and direct federation as resource-types.
+      parameters:
+        - {$ref: '#/components/parameters/Cluster'}
+        - {$ref: '#/components/parameters/Group'}
+        - {$ref: '#/components/parameters/Version'}
+        - {$ref: '#/components/parameters/Kind'}
+      responses:
+        '200':
+          description: Namespace inventory
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, cluster, freshness]
+                properties:
+                  items: {type: array, maxItems: 4096, uniqueItems: true, items: {type: string, maxLength: 63}}
+                  cluster: {type: string}
+                  freshness: {type: string}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/BackendFailure'}
+        '503': {$ref: '#/components/responses/BackendFailure'}
+        '508': {$ref: '#/components/responses/LoopDetected'}
   /resources/batch-get:
     post:
       operationId: batchGetResources

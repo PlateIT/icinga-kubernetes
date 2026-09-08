@@ -44,6 +44,40 @@ type ResourceType struct {
 	Count   int64  `json:"count"`
 }
 
+// ResourceNamespaces derives choices from live inventory, even when Namespace
+// objects themselves cannot be collected. Apply the same filters as resources.
+func (s Store) ResourceNamespaces(ctx context.Context, f ListFilter) ([]string, error) {
+	if f.Cluster == "" {
+		return nil, errors.New("cluster is required")
+	}
+	args, where, err := buildResourceFilter(f, false)
+	if err != nil {
+		return nil, err
+	}
+	where = append(where, "r.namespace <> ''")
+	rows, err := s.DB.QueryContext(ctx, `SELECT DISTINCT r.namespace FROM resource r WHERE `+
+		strings.Join(where, " AND ")+` ORDER BY r.namespace LIMIT 4097`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]string, 0)
+	for rows.Next() {
+		var namespace string
+		if err := rows.Scan(&namespace); err != nil {
+			return nil, err
+		}
+		items = append(items, namespace)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(items) > 4096 {
+		return nil, errors.New("namespace inventory exceeds 4096 entries")
+	}
+	return items, nil
+}
+
 func (s Store) ResourceTypes(ctx context.Context, cluster string, filters ...ListFilter) ([]ResourceType, error) {
 	if cluster == "" {
 		return nil, errors.New("cluster is required")
