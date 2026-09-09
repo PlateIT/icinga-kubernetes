@@ -47,8 +47,11 @@ Application roles never create, drop or mutate database schema.
   `X-Icinga-Fetched-At` always exposes the cache observation time.
   Cached reads return immediately: after five seconds a bounded background
   refresh updates the snapshot. Cold remote reads have a 250 ms deadline;
-  failed targets have a five-second retry cooldown. Identical in-flight reads
-  are coalesced, with at most 32 remote reads in flight per API replica.
+  failed targets have a five-second retry cooldown.
+  After cooldown, the next read starts one background recovery probe per failed
+  target; concurrent reads still return immediately. Idle targets are not polled.
+  Identical in-flight reads are coalesced, with at most 32 remote reads in flight
+  per API replica.
   Local dependency graphs never query satellites. Mixed graphs expose
   `parentFreshness` per requested parent. Batch clients can request
   `partial: true` to receive `{items, unavailableIds}`; unavailable IDs must

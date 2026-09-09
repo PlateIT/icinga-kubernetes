@@ -67,10 +67,73 @@ func TestFederationColdOutagesAreConcurrentAndCoolingDown(t *testing.T) {
 		s.federationRetry[key] = time.Now().Add(-time.Second)
 	}
 	s.federationMu.Unlock()
+	s.federatedResults(context.Background(), "/api/v1/resources/batch-get", []byte(`{"ids":[]}`))
+	waitFederation(t, s)
 	for _, result := range s.federatedResults(context.Background(), "/api/v1/resources/batch-get", []byte(`{"ids":[]}`)) {
 		if result.err != nil || result.freshness != "live" {
 			t.Fatalf("target did not recover after cooldown: %v", result.err)
 		}
+	}
+}
+
+func waitFederation(t *testing.T, s *Server) {
+	t.Helper()
+	s.federationMu.Lock()
+	var pending []*federationCall
+	for _, call := range s.federationPending {
+		pending = append(pending, call)
+	}
+	s.federationMu.Unlock()
+	for _, call := range pending {
+		select {
+		case <-call.done:
+		case <-time.After(time.Second):
+			t.Fatal("federation call did not complete")
+		}
+	}
+}
+
+func TestFailedTargetHasOnlyOneNonblockingRecoveryProbeAcrossPaths(t *testing.T) {
+	var calls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		w.Write([]byte(`[]`))
+	}))
+	defer remote.Close()
+	defer close(release)
+	target := config.FederationTarget{Name: "remote", URL: remote.URL}
+	s, _ := federationTestServer(t, target)
+	s.federationPending = make(map[string]*federationCall)
+	s.federationRetry = map[string]time.Time{target.Name + "\x00" + target.URL: time.Now().Add(-time.Second)}
+	s.federationProbe = make(map[string]bool)
+	start := time.Now()
+	if _, err := s.federationRead(context.Background(), &target, "GET", "/api/v1/resources", nil); err == nil {
+		t.Fatal("pending recovery was presented as live")
+	}
+	if time.Since(start) > 100*time.Millisecond {
+		t.Fatal("user waited for recovery probe")
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("no recovery probe")
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.federationRead(context.Background(), &target, "GET", "/api/v1/resources?name="+string(rune('a'+i)), nil)
+		}()
+	}
+	wg.Wait()
+	if calls.Load() != 1 {
+		t.Fatalf("concurrent requests triggered %d recovery probes", calls.Load())
 	}
 }
 

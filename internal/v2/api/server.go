@@ -58,6 +58,7 @@ type Server struct {
 	federationMu      sync.Mutex
 	federationPending map[string]*federationCall
 	federationRetry   map[string]time.Time
+	federationProbe   map[string]bool
 	requestsLimit     chan struct{}
 	liveLimit         chan struct{}
 	rateLimit         *rate.Limiter

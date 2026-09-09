@@ -80,11 +80,17 @@ func (s *Server) federationRead(ctx context.Context, target *config.FederationTa
 	if s.federationPending == nil {
 		s.federationPending = make(map[string]*federationCall)
 		s.federationRetry = make(map[string]time.Time)
+		s.federationProbe = make(map[string]bool)
 	}
 	call := s.federationPending[flightKey]
-	if call == nil && time.Now().After(s.federationRetry[targetKey]) && len(s.federationPending) < federationMaxPending {
+	knownFailed := !s.federationRetry[targetKey].IsZero()
+	if call == nil && !s.federationProbe[targetKey] && time.Now().After(s.federationRetry[targetKey]) && len(s.federationPending) < federationMaxPending {
 		call = &federationCall{done: make(chan struct{})}
 		s.federationPending[flightKey] = call
+		if knownFailed {
+			// One recovery probe per failed target, across all paths/cache keys.
+			s.federationProbe[targetKey] = true
+		}
 		targetCopy := *target
 		bodyCopy := bytes.Clone(body)
 		go func() {
@@ -97,6 +103,11 @@ func (s *Server) federationRead(ctx context.Context, target *config.FederationTa
 			s.federationMu.Lock()
 			if call.err != nil {
 				s.federationRetry[targetKey] = time.Now().Add(federationRetryDelay)
+			} else {
+				delete(s.federationRetry, targetKey)
+			}
+			if knownFailed {
+				delete(s.federationProbe, targetKey)
 			}
 			delete(s.federationPending, flightKey)
 			close(call.done)
@@ -106,6 +117,11 @@ func (s *Server) federationRead(ctx context.Context, target *config.FederationTa
 	s.federationMu.Unlock()
 	if haveCache {
 		return response, nil
+	}
+	if knownFailed {
+		// Recovery probes run in the background; users never wait on a target
+		// already known to be unavailable, even after the cooldown expires.
+		return federationResponse{}, errors.New("federation target unavailable; recovery check pending")
 	}
 	if call == nil {
 		return federationResponse{}, errors.New("federation target cooling down or busy")
