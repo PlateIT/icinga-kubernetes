@@ -13,6 +13,7 @@ import (
 type eventStore interface {
 	ApplyShard(context.Context, string, int) (int, error)
 	Cleanup(context.Context, time.Duration, time.Duration, time.Duration, time.Duration) error
+	ResolveEvents(context.Context) error
 }
 
 type intervals struct {
@@ -34,6 +35,8 @@ func run(ctx context.Context, cfg config.Config, s eventStore, identity string, 
 	defer metrics.SetReady(false)
 	cleanup := time.NewTicker(waits.cleanup)
 	defer cleanup.Stop()
+	events := time.NewTicker(30 * time.Second)
+	defer events.Stop()
 	idle := time.NewTimer(0)
 	defer idle.Stop()
 	for {
@@ -47,6 +50,11 @@ func run(ctx context.Context, cfg config.Config, s eventStore, identity string, 
 				}
 				metrics.Error()
 				slog.Error("cleanup failed", "error", err)
+			}
+		case <-events.C:
+			if err := s.ResolveEvents(ctx); err != nil && ctx.Err() == nil {
+				metrics.Error()
+				slog.Error("event recovery reconciliation failed", "error", err)
 			}
 		case <-idle.C:
 			processed, err := s.ApplyShard(ctx, identity, applyShardSize)

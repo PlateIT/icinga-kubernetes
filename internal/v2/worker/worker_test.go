@@ -27,6 +27,8 @@ type fakeStore struct {
 	onCleanup    func(int)
 }
 
+func (s *fakeStore) ResolveEvents(context.Context) error { return nil }
+
 func (s *fakeStore) ApplyShard(_ context.Context, _ string, limit int) (int, error) {
 	if limit != applyShardSize {
 		panic("unexpected apply shard size")

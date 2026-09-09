@@ -26,6 +26,7 @@ func TestKubernetesEventAdaptersKeepCompactEventMeaning(t *testing.T) {
 	registry := New()
 	object := &unstructured.Unstructured{Object: map[string]any{
 		"kind": "Event", "type": "Warning", "reason": "BackOff", "message": "container restart back-off",
+		"lastTimestamp": "2026-09-09T10:00:00Z", "series": map[string]any{"lastObservedTime": "2026-09-09T10:01:00Z"},
 		"involvedObject": map[string]any{"kind": "Pod", "namespace": "team-a", "name": "demo"},
 	}}
 	// Kubernetes discovery represents the core API group as an empty string;
@@ -36,6 +37,9 @@ func TestKubernetesEventAdaptersKeepCompactEventMeaning(t *testing.T) {
 	}
 	if summary["reason"] != "BackOff" || summary["involvedObject.name"] != "demo" || summary["adapter"] != "kubernetes-core-event" {
 		t.Fatalf("summary=%v", summary)
+	}
+	if summary["lastTimestamp"] != "2026-09-09T10:00:00Z" || summary["series.lastObservedTime"] != "2026-09-09T10:01:00Z" {
+		t.Fatalf("event occurrence timestamps missing: %v", summary)
 	}
 }
 

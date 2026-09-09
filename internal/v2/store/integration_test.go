@@ -82,6 +82,7 @@ func TestPostgreSQLLifecycle(t *testing.T) {
 		}
 	}()
 	s := Store{DB: db}
+	t.Run("event recovery lifecycle", func(t *testing.T) { testEventRecoveryLifecycle(t, ctx, s) })
 	if err := s.PutFederationCache(ctx, cacheEndpoint, "request", http.StatusOK, []byte(`{"items":[]}`), "stale"); err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +117,7 @@ func TestPostgreSQLLifecycle(t *testing.T) {
 	}
 	uid := uuid.NewString()
 	id := model.StableID(cluster, uid)
-	resource := model.Resource{ID: id, Cluster: cluster, UID: uid, Group: "apps", Version: "v1", Kind: "Deployment", Namespace: "test", Name: "demo", ResourceVersion: "1", Labels: map[string]string{"app": "demo"}, State: model.StateOK, ObservedAt: time.Now().UTC()}
+	resource := model.Resource{ID: id, Cluster: cluster, UID: uid, Group: "apps", Version: "v1", Kind: "Deployment", Namespace: "test", Name: "demo", ResourceVersion: "1", Labels: map[string]string{"app": "demo"}, State: model.StateOK, ObservedAt: time.Now().UTC().Truncate(time.Microsecond)}
 	batch := model.IngestBatch{Cluster: cluster, Shard: "apps/v1/deployments", Events: []model.IngestEvent{{EventID: uuid.NewString(), Action: "upsert", Resource: resource}}}
 	if err := s.Enqueue(ctx, batch); err != nil {
 		t.Fatal(err)
@@ -288,7 +289,7 @@ func TestPostgreSQLLifecycle(t *testing.T) {
 		t.Fatalf("selector resolution=%#v err=%v", resolution, err)
 	}
 
-	heartbeat := model.Resource{ID: model.StableID(cluster, "heartbeat"), Cluster: cluster, UID: "heartbeat", Group: "icinga-kubernetes.io", Version: "v2", Kind: "Heartbeat", Name: "collector", ResourceVersion: "1", State: model.StateOK, ObservedAt: time.Now().UTC()}
+	heartbeat := model.Resource{ID: model.StableID(cluster, "heartbeat"), Cluster: cluster, UID: "heartbeat", Group: "icinga-kubernetes.io", Version: "v2", Kind: "Heartbeat", Name: "collector", ResourceVersion: "1", State: model.StateOK, ObservedAt: time.Now().UTC().Truncate(time.Microsecond)}
 	if err := s.Enqueue(ctx, model.IngestBatch{Cluster: cluster, Shard: "__heartbeat__", Events: []model.IngestEvent{{EventID: uuid.NewString(), Action: "heartbeat", Resource: heartbeat}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +349,7 @@ func TestPostgreSQLLifecycle(t *testing.T) {
 				uid := fmt.Sprintf("concurrent-%d-%s", index, uuid.NewString())
 				resource := model.Resource{ID: model.StableID(cluster, uid), Cluster: cluster, UID: uid,
 					Group: "core", Version: "v1", Kind: "Pod", Namespace: "test", Name: uid,
-					ResourceVersion: "1", State: model.StateOK, ObservedAt: time.Now().UTC()}
+					ResourceVersion: "1", State: model.StateOK, ObservedAt: time.Now().UTC().Truncate(time.Microsecond)}
 				errorsSeen <- s.Enqueue(ctx, model.IngestBatch{Cluster: cluster, Shard: "concurrent",
 					Events: []model.IngestEvent{{EventID: uuid.NewString(), Action: "upsert", Resource: resource}}})
 			}(i)
@@ -484,7 +485,7 @@ func TestPostgreSQLLifecycle(t *testing.T) {
 	t.Run("stale leader replay cannot resurrect a reconciled resource", func(t *testing.T) {
 		shard := "core/v1/pods@failover"
 		resourceID := model.StableID(cluster, "failover-pod")
-		initial := time.Now().UTC().Add(-2 * time.Minute)
+		initial := time.Now().UTC().Truncate(time.Microsecond).Add(-2 * time.Minute)
 		firstCutoff := initial.Add(30 * time.Second)
 		latestCutoff := initial.Add(time.Minute)
 		resource := model.Resource{ID: resourceID, Cluster: cluster, UID: "failover-pod", Group: "core", Version: "v1", Kind: "Pod", Namespace: "failover", Name: "pod", ResourceVersion: "1", State: model.StateOK, ObservedAt: initial}

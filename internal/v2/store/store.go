@@ -422,6 +422,11 @@ func applyResource(ctx context.Context, tx *sql.Tx, action, shard string, r mode
 		SELECT (SELECT count(*) FROM queued)+(SELECT count(*) FROM changed)+(SELECT count(*) FROM watermarked)`, r.Cluster, shard, r.ObservedAt)
 		return err
 	}
+	if action != "delete" {
+		if err := resolveEvent(ctx, tx, &r); err != nil {
+			return err
+		}
+	}
 	labels, _ := json.Marshal(r.Labels)
 	annotations, _ := json.Marshal(r.Annotations)
 	conditions, _ := json.Marshal(r.Conditions)
