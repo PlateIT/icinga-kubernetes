@@ -30,6 +30,14 @@ func describeNative(group string, obj *unstructured.Unstructured, conditions []m
 		}
 	}
 	switch kind {
+	case "Node":
+		unschedulable, _, _ := unstructured.NestedBool(obj.Object, "spec", "unschedulable")
+		summary["spec.unschedulable"] = unschedulable
+		state, reason := describeNode(conditions)
+		if unschedulable {
+			reason += "; Scheduling disabled (cordoned)"
+		}
+		return state, reason, true
 	case "Pod":
 		phase := text("status.phase")
 		statuses, _, _ := unstructured.NestedSlice(obj.Object, "status", "containerStatuses")
