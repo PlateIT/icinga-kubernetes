@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -539,14 +540,18 @@ func TestDirectFederationUsesCacheAcrossStaleAndUnavailableWindows(t *testing.T)
 	}
 	remote.Close()
 
+	state.mu.Lock()
 	state.fetchedAt = time.Now().Add(-31 * time.Second)
+	state.mu.Unlock()
 	stale := request("")
 	if stale.Code != http.StatusOK || stale.Header().Get("X-Icinga-Freshness") != "stale" || stale.Header().Get("Warning") == "" ||
 		!strings.Contains(stale.Body.String(), `"freshness":"stale"`) {
 		t.Fatalf("stale cache response status=%d freshness=%q warning=%q body=%s", stale.Code, stale.Header().Get("X-Icinga-Freshness"), stale.Header().Get("Warning"), stale.Body.String())
 	}
 
+	state.mu.Lock()
 	state.fetchedAt = time.Now().Add(-2*time.Minute - time.Second)
+	state.mu.Unlock()
 	unavailable := request("")
 	if unavailable.Code != http.StatusOK || unavailable.Header().Get("X-Icinga-Freshness") != "unavailable" ||
 		!strings.Contains(unavailable.Body.String(), `"freshness":"unavailable"`) {
@@ -560,6 +565,8 @@ func TestDirectFederationUsesCacheAcrossStaleAndUnavailableWindows(t *testing.T)
 }
 
 type federationCacheTestState struct {
+	mu        sync.Mutex
+	local     []driver.Value
 	endpoint  string
 	key       string
 	status    int64
@@ -587,6 +594,8 @@ func (federationCacheTestConnection) Prepare(string) (driver.Stmt, error) { retu
 func (federationCacheTestConnection) Close() error                        { return nil }
 func (federationCacheTestConnection) Begin() (driver.Tx, error)           { return nil, driver.ErrSkip }
 func (c federationCacheTestConnection) ExecContext(_ context.Context, _ string, args []driver.NamedValue) (driver.Result, error) {
+	c.state.mu.Lock()
+	defer c.state.mu.Unlock()
 	if len(args) != 5 {
 		return nil, errors.New("unexpected federation cache upsert arguments")
 	}
@@ -598,7 +607,30 @@ func (c federationCacheTestConnection) ExecContext(_ context.Context, _ string, 
 	c.state.fetchedAt = time.Now()
 	return driver.RowsAffected(1), nil
 }
-func (c federationCacheTestConnection) QueryContext(_ context.Context, _ string, args []driver.NamedValue) (driver.Rows, error) {
+func (c federationCacheTestConnection) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	c.state.mu.Lock()
+	defer c.state.mu.Unlock()
+	if strings.Contains(query, "FROM resource r") {
+		count := 17
+		if strings.Contains(query, "resource_owner") {
+			count++
+		}
+		rows := &federationCacheTestRows{columns: make([]string, count)}
+		if count == 17 && c.state.local != nil {
+			for _, arg := range args {
+				if arg.Value == c.state.local[0] {
+					rows.values = [][]driver.Value{c.state.local}
+				}
+			}
+		}
+		return rows, nil
+	}
+	if strings.Contains(query, "FROM ingest_shard_head") {
+		return &federationCacheTestRows{columns: make([]string, 3), values: [][]driver.Value{{int64(0), nil, time.Now()}}}, nil
+	}
+	if strings.Contains(query, "FROM notification_outbox") {
+		return &federationCacheTestRows{columns: make([]string, 3), values: [][]driver.Value{{int64(0), nil, int64(0)}}}, nil
+	}
 	if len(args) != 2 || args[0].Value != c.state.endpoint || args[1].Value != c.state.key || c.state.fetchedAt.IsZero() {
 		return &federationCacheTestRows{}, nil
 	}
@@ -606,11 +638,15 @@ func (c federationCacheTestConnection) QueryContext(_ context.Context, _ string,
 }
 
 type federationCacheTestRows struct {
-	values [][]driver.Value
-	index  int
+	columns []string
+	values  [][]driver.Value
+	index   int
 }
 
-func (federationCacheTestRows) Columns() []string {
+func (r federationCacheTestRows) Columns() []string {
+	if r.columns != nil {
+		return r.columns
+	}
 	return []string{"status_code", "response", "freshness", "fetched_at"}
 }
 func (federationCacheTestRows) Close() error { return nil }

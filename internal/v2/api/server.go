@@ -1,9 +1,7 @@
 package api
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
@@ -37,29 +35,32 @@ var businessProcessAPIKindPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*$`)
 var base64URLPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 type Server struct {
-	Config          config.Config
-	Store           store.Store
-	started         time.Time
-	requests        atomic.Uint64
-	errors          atomic.Uint64
-	activeRequests  atomic.Int64
-	responses2xx    atomic.Uint64
-	responses3xx    atomic.Uint64
-	responses4xx    atomic.Uint64
-	responses5xx    atomic.Uint64
-	responses429    atomic.Uint64
-	durationNanos   atomic.Uint64
-	durationBuckets [9]atomic.Uint64
-	Live            *live.Gateway
-	Adapters        *adapter.Registry
-	adapterReloadMu sync.Mutex
-	adapterReloadAt time.Time
-	branchStatusMu  sync.Mutex
-	branchStatusAt  time.Time
-	branchStatuses  []branchStatus
-	requestsLimit   chan struct{}
-	liveLimit       chan struct{}
-	rateLimit       *rate.Limiter
+	Config            config.Config
+	Store             store.Store
+	started           time.Time
+	requests          atomic.Uint64
+	errors            atomic.Uint64
+	activeRequests    atomic.Int64
+	responses2xx      atomic.Uint64
+	responses3xx      atomic.Uint64
+	responses4xx      atomic.Uint64
+	responses5xx      atomic.Uint64
+	responses429      atomic.Uint64
+	durationNanos     atomic.Uint64
+	durationBuckets   [9]atomic.Uint64
+	Live              *live.Gateway
+	Adapters          *adapter.Registry
+	adapterReloadMu   sync.Mutex
+	adapterReloadAt   time.Time
+	branchStatusMu    sync.Mutex
+	branchStatusAt    time.Time
+	branchStatuses    []branchStatus
+	federationMu      sync.Mutex
+	federationPending map[string]*federationCall
+	federationRetry   map[string]time.Time
+	requestsLimit     chan struct{}
+	liveLimit         chan struct{}
+	rateLimit         *rate.Limiter
 }
 
 type branchStatus struct {
@@ -1190,7 +1191,8 @@ func (s *Server) resourceInventory(w http.ResponseWriter, r *http.Request, names
 
 func (s *Server) batchGet(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		IDs []string `json:"ids"`
+		IDs     []string `json:"ids"`
+		Partial bool     `json:"partial"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, 400, err.Error())
@@ -1237,8 +1239,8 @@ func (s *Server) batchGet(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		encoded, _ := json.Marshal(map[string]any{"ids": missing})
-		for i := range s.Config.FederationTargets {
-			response, remoteFreshness, callErr := s.callFederated(r.Context(), &s.Config.FederationTargets[i], http.MethodPost, "/api/v1/resources/batch-get", encoded)
+		for _, result := range s.federatedResults(r.Context(), "/api/v1/resources/batch-get", encoded) {
+			response, remoteFreshness, callErr := result.body, result.freshness, result.err
 			if callErr != nil {
 				uncertain = true
 				responseFreshness = worseFreshness(responseFreshness, "unavailable")
@@ -1270,6 +1272,19 @@ func (s *Server) batchGet(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+	}
+	if body.Partial {
+		unavailable := make([]string, 0)
+		if uncertain {
+			for _, id := range body.IDs {
+				if !found[id] {
+					unavailable = append(unavailable, id)
+				}
+			}
+		}
+		w.Header().Set("X-Icinga-Freshness", responseFreshness)
+		writeJSON(w, 200, map[string]any{"items": items, "unavailableIds": unavailable})
+		return
 	}
 	if len(found) < len(requested) && uncertain {
 		writeError(w, http.StatusServiceUnavailable, "resource lookup is incomplete")
@@ -1382,46 +1397,98 @@ func (s *Server) resolveGraph(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	freshness := s.localFreshness(r.Context())
-	if federationAllowed(r) {
-		encoded, _ := json.Marshal(body)
-		for i := range s.Config.FederationTargets {
-			response, remoteFreshness, callErr := s.callFederated(r.Context(), &s.Config.FederationTargets[i], http.MethodPost, "/api/v1/graph/resolve", encoded)
-			if callErr != nil {
-				freshness = worseFreshness(freshness, "unavailable")
+	localFreshness := s.localFreshness(r.Context())
+	parentFreshness := make(map[string]string, len(body.IDs))
+	resolvedParents := make([]string, 0, len(children))
+	for id := range children {
+		parentFreshness[id] = localFreshness
+		resolvedParents = append(resolvedParents, id)
+		for i := range children[id] {
+			children[id][i].Freshness = localFreshness
+		}
+	}
+	missing := make([]string, 0)
+	missingSet := make(map[string]bool)
+	for _, id := range body.IDs {
+		if _, found := parentFreshness[id]; !found {
+			missing = append(missing, id)
+			missingSet[id] = true
+		}
+	}
+	allLive := localFreshness == "live"
+	if federationAllowed(r) && len(missing) > 0 {
+		encoded, _ := json.Marshal(map[string]any{"ids": missing, "depth": 1})
+		for _, result := range s.federatedResults(r.Context(), "/api/v1/graph/resolve", encoded) {
+			if result.err != nil {
+				allLive = false
 				continue
 			}
 			var remote struct {
-				Children  map[string][]model.Resource `json:"children"`
-				Depth     int                         `json:"depth"`
-				Snapshot  time.Time                   `json:"snapshot"`
-				Freshness string                      `json:"freshness"`
+				Children        map[string][]model.Resource `json:"children"`
+				Depth           int                         `json:"depth"`
+				Snapshot        time.Time                   `json:"snapshot"`
+				Freshness       string                      `json:"freshness"`
+				ResolvedParents []string                    `json:"resolvedParents"`
+				ParentFreshness map[string]string           `json:"parentFreshness"`
 			}
-			if json.Unmarshal(response, &remote) != nil || remote.Children == nil || remote.Depth != 1 ||
-				remote.Snapshot.IsZero() || !validFreshness(remote.Freshness) {
-				freshness = worseFreshness(freshness, "unavailable")
+			if json.Unmarshal(result.body, &remote) != nil || remote.Children == nil || remote.Depth != 1 || remote.Snapshot.IsZero() || !validFreshness(remote.Freshness) {
+				allLive = false
 				continue
 			}
-			effectiveFreshness := worseFreshness(remoteFreshness, remote.Freshness)
-			freshness = worseFreshness(freshness, effectiveFreshness)
-			for id, entries := range remote.Children {
-				if _, expected := seenIDs[id]; !expected {
-					freshness = worseFreshness(freshness, "unavailable")
-					continue
-				}
-				if len(entries) > 0 || children[id] == nil {
-					for j := range entries {
-						if !validResourceResponse(entries[j]) {
-							freshness = worseFreshness(freshness, "unavailable")
-							entries = nil
-							break
-						}
-						entries[j].Freshness = effectiveFreshness
-					}
-					children[id] = append(children[id], entries...)
+			if result.freshness != "live" || remote.Freshness != "live" {
+				allLive = false
+			}
+			// Children maps contain known parents, including leaves with no children.
+			if remote.ResolvedParents == nil {
+				for id := range remote.Children {
+					remote.ResolvedParents = append(remote.ResolvedParents, id)
 				}
 			}
+			for _, id := range remote.ResolvedParents {
+				if !missingSet[id] {
+					allLive = false
+					continue
+				}
+				if _, found := parentFreshness[id]; found {
+					continue
+				}
+				freshness := remote.ParentFreshness[id]
+				if freshness == "" {
+					freshness = remote.Freshness
+				}
+				if !validFreshness(freshness) {
+					allLive = false
+					continue
+				}
+				freshness = worseFreshness(result.freshness, freshness)
+				entries := remote.Children[id]
+				valid := true
+				for i := range entries {
+					if !validResourceResponse(entries[i]) {
+						valid = false
+						break
+					}
+					entries[i].Freshness = worseFreshness(entries[i].Freshness, freshness)
+				}
+				if !valid {
+					allLive = false
+					continue
+				}
+				children[id] = entries
+				parentFreshness[id] = freshness
+				resolvedParents = append(resolvedParents, id)
+			}
 		}
+	}
+	freshness := localFreshness
+	for _, id := range body.IDs {
+		if _, found := parentFreshness[id]; !found {
+			parentFreshness[id] = "live"
+			if !allLive {
+				parentFreshness[id] = "unavailable"
+			}
+		}
+		freshness = worseFreshness(freshness, parentFreshness[id])
 	}
 	for parent, entries := range children {
 		seenChildren := make(map[string]bool, len(entries))
@@ -1435,7 +1502,7 @@ func (s *Server) resolveGraph(w http.ResponseWriter, r *http.Request) {
 		children[parent] = unique
 	}
 	w.Header().Set("X-Icinga-Freshness", freshness)
-	writeJSON(w, 200, map[string]any{"children": children, "depth": 1, "snapshot": time.Now().UTC(), "freshness": freshness})
+	writeJSON(w, 200, map[string]any{"children": children, "depth": 1, "snapshot": time.Now().UTC(), "freshness": freshness, "parentFreshness": parentFreshness, "resolvedParents": resolvedParents})
 }
 
 func (s *Server) proxyFederated(w http.ResponseWriter, r *http.Request, cluster string, body []byte) bool {
@@ -1461,70 +1528,22 @@ func (s *Server) proxyFederated(w http.ResponseWriter, r *http.Request, cluster 
 			return true
 		}
 	}
-	sum := sha256.Sum256(append([]byte(r.Method+"\x00"+r.URL.RequestURI()+"\x00"), body...))
-	key := fmt.Sprintf("%x", sum[:])
-	url := strings.TrimRight(target.URL, "/") + r.URL.Path
-	if r.URL.RawQuery != "" {
-		url += "?" + r.URL.RawQuery
-	}
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, url, strings.NewReader(string(body)))
-	if err == nil {
-		token := s.token("federation")
-		req.Header.Set("Authorization", "Bearer "+token)
-		contentType := r.Header.Get("Content-Type")
-		if contentType == "" {
-			contentType = "application/json"
-		}
-		req.Header.Set("Content-Type", contentType)
-		req.Header.Set("X-Icinga-Federation-Hop", s.Config.ClusterName)
-		client := http.Client{Timeout: 10 * time.Second}
-		var resp *http.Response
-		resp, err = client.Do(req)
-		if err == nil {
-			defer resp.Body.Close()
-			response, readErr := readBounded(resp.Body, 16<<20)
-			if readErr == nil && resp.StatusCode < 500 {
-				freshness := resp.Header.Get("X-Icinga-Freshness")
-				if freshness == "" {
-					freshness = "live"
-				}
-				if !validFreshness(freshness) {
-					err = errors.New("remote returned invalid freshness")
-					goto fallback
-				}
-				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-					_ = s.Store.PutFederationCache(r.Context(), target.Name, key, resp.StatusCode, response, freshness)
-				}
-				w.Header().Set("Content-Type", "application/json")
-				w.Header().Set("X-Icinga-Freshness", freshness)
-				w.WriteHeader(resp.StatusCode)
-				_, _ = w.Write(response)
-				return true
-			}
-			if readErr != nil {
-				err = readErr
-			} else {
-				err = fmt.Errorf("remote returned %s", resp.Status)
-			}
-		}
-	}
-fallback:
-	status, cached, sourceFreshness, fetched, cacheErr := s.Store.GetFederationCache(r.Context(), target.Name, key)
-	if cacheErr == nil {
-		age := time.Since(fetched)
-		freshness := worseFreshness(sourceFreshness, federationFreshness(age, s.Config.StaleAfter, s.Config.UnavailableAfter))
-		w.Header().Set("Content-Type", "application/json")
-		if freshness != "live" {
-			w.Header().Set("Warning", `110 - "federation response is stale"`)
-		}
-		w.Header().Set("X-Icinga-Freshness", freshness)
-		w.Header().Set("X-Icinga-Fetched-At", fetched.UTC().Format(time.RFC3339Nano))
-		w.WriteHeader(status)
-		_, _ = w.Write(withFreshness(cached, freshness))
+	response, err := s.federationRead(r.Context(), target, r.Method, r.URL.RequestURI(), body)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "federation target unavailable")
 		return true
 	}
-	slog.Warn("federation target unavailable", "target", target.Name, "error", err)
-	writeError(w, http.StatusServiceUnavailable, "federation target unavailable")
+	w.Header().Set("Content-Type", "application/json")
+	if federationLogs(r.URL.Path) && response.status == http.StatusOK {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	}
+	w.Header().Set("X-Icinga-Freshness", response.freshness)
+	w.Header().Set("X-Icinga-Fetched-At", response.fetched.UTC().Format(time.RFC3339Nano))
+	if response.freshness != "live" {
+		w.Header().Set("Warning", `110 - "federation response is stale"`)
+	}
+	w.WriteHeader(response.status)
+	_, _ = w.Write(withFreshness(response.body, response.freshness))
 	return true
 }
 
@@ -1584,44 +1603,14 @@ func validFreshness(value string) bool {
 }
 
 func (s *Server) callFederated(ctx context.Context, target *config.FederationTarget, method, path string, body []byte) ([]byte, string, error) {
-	sum := sha256.Sum256(append([]byte(method+"\x00"+path+"\x00"), body...))
-	key := fmt.Sprintf("%x", sum[:])
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(target.URL, "/")+path, bytes.NewReader(body))
-	if err == nil {
-		token := s.token("federation")
-		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Icinga-Federation-Hop", s.Config.ClusterName)
-		resp, callErr := (&http.Client{Timeout: 10 * time.Second}).Do(req)
-		if callErr == nil {
-			defer resp.Body.Close()
-			response, readErr := readBounded(resp.Body, 16<<20)
-			if readErr == nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				freshness := resp.Header.Get("X-Icinga-Freshness")
-				if freshness == "" {
-					freshness = "live"
-				}
-				if !validFreshness(freshness) {
-					return nil, "unavailable", errors.New("remote returned invalid freshness")
-				}
-				_ = s.Store.PutFederationCache(ctx, target.Name, key, resp.StatusCode, response, freshness)
-				return response, freshness, nil
-			}
-			if readErr != nil {
-				err = readErr
-			} else {
-				err = fmt.Errorf("remote returned %s", resp.Status)
-			}
-		} else {
-			err = callErr
-		}
+	response, err := s.federationRead(ctx, target, method, path, body)
+	if err != nil {
+		return nil, "unavailable", err
 	}
-	_, cached, sourceFreshness, fetched, cacheErr := s.Store.GetFederationCache(ctx, target.Name, key)
-	if cacheErr == nil {
-		freshness := worseFreshness(sourceFreshness, federationFreshness(time.Since(fetched), s.Config.StaleAfter, s.Config.UnavailableAfter))
-		return cached, freshness, nil
+	if response.status < 200 || response.status >= 300 {
+		return nil, "unavailable", fmt.Errorf("remote returned HTTP %d", response.status)
 	}
-	return nil, "unavailable", err
+	return response.body, response.freshness, nil
 }
 
 func federationFreshness(age, staleAfter, unavailableAfter time.Duration) string {
