@@ -41,6 +41,28 @@ func TestEventRecoveryRequiresNewerRuntimeEvidence(t *testing.T) {
 	}
 }
 
+func TestInactiveEventsUseOccurrenceNotCollectorObservation(t *testing.T) {
+	now := time.Now().UTC()
+	r := model.Resource{ObservedAt: now, Summary: map[string]any{"lastTimestamp": now.Add(-time.Hour).Format(time.RFC3339Nano)}}
+	if eventInactivity(r, now) == "" {
+		t.Fatal("relist made an old warning active")
+	}
+	if eventRecovery(r, model.StateCritical, "Pod", now, false) == "" {
+		t.Fatal("unrelated current pod fault kept historical warning active")
+	}
+	r.Summary["series.lastObservedTime"] = now.Add(-time.Minute).Format(time.RFC3339Nano)
+	if eventInactivity(r, now) != "" {
+		t.Fatal("repeated warning was expired")
+	}
+	if eventRecovery(r, model.StateCritical, "Pod", now, false) != "" {
+		t.Fatal("active warning on failing pod was closed")
+	}
+	r.Summary = map[string]any{"eventTime": "invalid"}
+	if eventInactivity(r, now) != "" {
+		t.Fatal("invalid timestamp was treated as proof of inactivity")
+	}
+}
+
 func testEventRecoveryLifecycle(t *testing.T, ctx context.Context, s Store) {
 	cluster := "event-recovery-" + uuid.NewString()
 	defer func() {
@@ -126,4 +148,32 @@ func testEventRecoveryLifecycle(t *testing.T, ctx context.Context, s Store) {
 		t.Fatal(err)
 	}
 	state(model.StateOK)
+	// An old warning without a known referenced object must also become historical.
+	event.ResourceVersion = "3"
+	event.Summary = map[string]any{"type": "Warning", "lastTimestamp": now.Add(-11 * time.Minute).Format(time.RFC3339Nano), "involvedObject.uid": uuid.NewString()}
+	apply("upsert", event)
+	state(model.StateOK)
+	// Simulate an already stored warning from an older worker version.
+	if _, err := s.DB.ExecContext(ctx, "UPDATE resource SET state='warning',summary=summary-'eventLifecycle' WHERE id=$1", event.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ResolveEvents(ctx); err != nil {
+		t.Fatal(err)
+	}
+	state(model.StateOK)
+	var lifecycle string
+	if err := s.DB.QueryRowContext(ctx, "SELECT summary->>'eventLifecycle' FROM resource WHERE id=$1", event.ID).Scan(&lifecycle); err != nil {
+		t.Fatal(err)
+	}
+	if lifecycle != "inactive" {
+		t.Fatalf("lifecycle=%s", lifecycle)
+	}
+	// A renewed warning series is active again, without a healthy reference.
+	event.ResourceVersion = "4"
+	event.Summary["series.lastObservedTime"] = now.Format(time.RFC3339Nano)
+	apply("upsert", event)
+	if err := s.ResolveEvents(ctx); err != nil {
+		t.Fatal(err)
+	}
+	state(model.StateWarning)
 }

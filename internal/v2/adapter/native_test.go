@@ -7,6 +7,18 @@ import (
 	"testing"
 )
 
+func TestNetworkPolicyHasNoIndependentRuntimeHealth(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{"kind": "NetworkPolicy", "spec": map[string]any{"podSelector": map[string]any{}}}}
+	state, reason, _ := New().Describe(schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "networkpolicies"}, obj, nil)
+	if state != model.StateOK || reason != "Policy configured; no independent runtime health" {
+		t.Fatalf("state=%s reason=%s", state, reason)
+	}
+	state, _, _ = New().Describe(schema.GroupVersionResource{Group: "custom.example", Resource: "networkpolicies"}, obj, nil)
+	if state != model.StateUnknown {
+		t.Fatal("custom resource incorrectly treated as native NetworkPolicy")
+	}
+}
+
 func TestNativeWorkloadStates(t *testing.T) {
 	for _, test := range []struct {
 		name, kind, phase string

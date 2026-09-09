@@ -6,10 +6,29 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/icinga/icinga-kubernetes/internal/v2/model"
 )
+
+const eventProblemWindow = 10 * time.Minute
+const inactiveEventReason = "Historical event: no occurrence in the last 10 minutes"
+
+func eventInactivity(r model.Resource, now time.Time) string {
+	last := eventOccurrence(r)
+	if !last.IsZero() && !last.After(now.Add(-eventProblemWindow)) {
+		return inactiveEventReason
+	}
+	return ""
+}
+
+func eventLifecycle(reason string) string {
+	if strings.HasPrefix(reason, inactiveEventReason) {
+		return "inactive"
+	}
+	return "resolved"
+}
 
 func warningEvent(r model.Resource) bool {
 	return r.Kind == "Event" && (r.Group == "core" || r.Group == "events.k8s.io") && r.State != model.StateOK
@@ -39,6 +58,9 @@ func eventOccurrence(r model.Resource) time.Time {
 }
 
 func eventRecovery(r model.Resource, state model.State, kind string, observed time.Time, deleted bool) string {
+	if reason := eventInactivity(r, time.Now()); reason != "" {
+		return reason
+	}
 	last := eventOccurrence(r)
 	if last.IsZero() || observed.Before(last) {
 		return ""
@@ -59,17 +81,21 @@ func eventRecovery(r model.Resource, state model.State, kind string, observed ti
 }
 
 func resolveEvent(ctx context.Context, tx *sql.Tx, r *model.Resource) error {
-	if !warningEvent(*r) || eventReference(*r) == "" {
+	if !warningEvent(*r) {
 		return nil
 	}
-	var reason string
+	reason := eventInactivity(*r, time.Now())
 	// Replaying the same Kubernetes event must not reopen a resolved incident.
+	var previous string
 	err := tx.QueryRowContext(ctx, `SELECT reason FROM resource WHERE id=$1 AND resource_version=$2
-		AND state='ok' AND summary->>'eventLifecycle'='resolved' AND deleted_at IS NULL`, r.ID, r.ResourceVersion).Scan(&reason)
+		AND state='ok' AND summary->>'eventLifecycle' IN ('resolved','inactive') AND deleted_at IS NULL`, r.ID, r.ResourceVersion).Scan(&previous)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	if reason == "" {
+	if previous != "" {
+		reason = previous
+	}
+	if reason == "" && eventReference(*r) != "" {
 		var state model.State
 		var kind string
 		var observed time.Time
@@ -87,7 +113,7 @@ func resolveEvent(ctx context.Context, tx *sql.Tx, r *model.Resource) error {
 	}
 	if reason != "" {
 		r.State, r.Reason = model.StateOK, reason
-		r.Summary["eventLifecycle"] = "resolved"
+		r.Summary["eventLifecycle"] = eventLifecycle(reason)
 	}
 	return nil
 }
@@ -101,11 +127,10 @@ func (s Store) ResolveEvents(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	rows, err := tx.QueryContext(ctx, `SELECT e.id,e.summary,p.state,p.kind,p.observed_at,p.deleted_at IS NOT NULL
-		FROM resource e JOIN resource p ON p.cluster_name=e.cluster_name AND p.namespace=e.namespace
+	rows, err := tx.QueryContext(ctx, `SELECT e.id,e.summary,COALESCE(p.state,'unknown'),COALESCE(p.kind,''),COALESCE(p.observed_at,'epoch'::timestamptz),p.deleted_at IS NOT NULL
+		FROM resource e LEFT JOIN resource p ON p.cluster_name=e.cluster_name AND p.namespace=e.namespace
 		AND p.kubernetes_uid=COALESCE(e.summary->>'regarding.uid',e.summary->>'involvedObject.uid')
 		WHERE e.kind='Event' AND e.api_group IN ('core','events.k8s.io') AND e.state<>'ok' AND e.deleted_at IS NULL
-		AND (p.state='ok' OR p.deleted_at IS NOT NULL)
 		ORDER BY e.id FOR UPDATE OF e SKIP LOCKED`)
 	if err != nil {
 		return err
@@ -140,13 +165,13 @@ func (s Store) ResolveEvents(ctx context.Context) error {
 	}
 	for _, r := range recovered {
 		_, err = tx.ExecContext(ctx, `WITH recovered AS (
-			UPDATE resource SET state='ok',reason=$2,summary=summary || '{"eventLifecycle":"resolved"}'::jsonb,
+			UPDATE resource SET state='ok',reason=$2,summary=summary || jsonb_build_object('eventLifecycle',$3::text),
 			changed_at=clock_timestamp() WHERE id=$1 RETURNING *
 		), notified AS (
 			INSERT INTO notification_outbox(resource_id,cluster_name,api_group,api_version,kind,namespace,name,labels,state,reason,action)
 			SELECT id,cluster_name,api_group,api_version,kind,namespace,name,labels,state,reason,'upsert' FROM recovered
 		)
-		INSERT INTO change_log(resource_id,cluster_name,action) SELECT id,cluster_name,'upsert' FROM recovered`, r.id, r.reason)
+		INSERT INTO change_log(resource_id,cluster_name,action) SELECT id,cluster_name,'upsert' FROM recovered`, r.id, r.reason, eventLifecycle(r.reason))
 		if err != nil {
 			return err
 		}

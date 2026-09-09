@@ -9,6 +9,9 @@ import (
 
 // Only bounded operational fields are retained, never container environments or Secret data.
 func describeNative(group string, obj *unstructured.Unstructured, conditions []model.Condition, summary map[string]any) (model.State, string, bool) {
+	if group == "networking.k8s.io" && obj.GetKind() == "NetworkPolicy" {
+		return model.StateOK, "Policy configured; no independent runtime health", true
+	}
 	if group != "" && group != "core" && group != "apps" && group != "batch" && group != "discovery.k8s.io" {
 		return "", "", false
 	}
