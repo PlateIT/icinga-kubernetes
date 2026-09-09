@@ -36,6 +36,7 @@ func TestBranchStatusChecksAreConcurrentAndBrieflyCached(t *testing.T) {
 		started <- struct{}{}
 		<-release
 		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ready"}`))
 	}))
 	defer target.Close()
 	s := &Server{Config: config.Config{FederationTargets: []config.FederationTarget{

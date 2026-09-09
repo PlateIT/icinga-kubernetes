@@ -1737,37 +1737,23 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request) {
 func (s *Server) branches(w http.ResponseWriter, r *http.Request) {
 	s.branchStatusMu.Lock()
 	defer s.branchStatusMu.Unlock()
-	if time.Since(s.branchStatusAt) < 5*time.Second {
+	if time.Since(s.branchStatusAt) < federationCacheTTL {
 		writeJSON(w, 200, map[string]any{"items": s.branchStatuses, "transitive": false})
 		return
 	}
 	results := make([]branchStatus, len(s.Config.FederationTargets))
-	client := http.Client{Timeout: 3 * time.Second}
-	semaphore := make(chan struct{}, 16)
 	var wg sync.WaitGroup
 	for index, target := range s.Config.FederationTargets {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
 			start := time.Now()
-			requestContext, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			req, err := http.NewRequestWithContext(requestContext, http.MethodGet, target.URL+"/api/v1/health/ready", nil)
 			v := branchStatus{Name: target.Name, Freshness: "unavailable"}
-			if err == nil {
-				resp, requestErr := client.Do(req)
-				if requestErr == nil {
-					resp.Body.Close()
-					if resp.StatusCode == http.StatusOK {
-						v.Freshness = "live"
-					}
-					v.Latency = time.Since(start).String()
-				} else {
-					slog.Warn("federation health request failed", "target", target.Name, "error", requestErr)
-				}
+			response, err := s.federationRead(r.Context(), &target, http.MethodGet, "/api/v1/health/ready", nil)
+			if err == nil && response.status == http.StatusOK && response.freshness == "live" {
+				v.Freshness = "live"
 			}
+			v.Latency = time.Since(start).String()
 			results[index] = v
 		}()
 	}
@@ -1776,7 +1762,6 @@ func (s *Server) branches(w http.ResponseWriter, r *http.Request) {
 	s.branchStatusAt = time.Now()
 	writeJSON(w, 200, map[string]any{"items": results, "transitive": false})
 }
-
 func (s *Server) branchInventory(w http.ResponseWriter, _ *http.Request) {
 	items := make([]map[string]string, len(s.Config.FederationTargets))
 	for index, target := range s.Config.FederationTargets {

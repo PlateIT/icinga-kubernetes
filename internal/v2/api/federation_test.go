@@ -137,6 +137,26 @@ func TestFailedTargetHasOnlyOneNonblockingRecoveryProbeAcrossPaths(t *testing.T)
 	}
 }
 
+func TestDashboardStatusSharesOutageCooldown(t *testing.T) {
+	var calls atomic.Int32
+	release := make(chan struct{})
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); <-release }))
+	defer remote.Close()
+	defer close(release)
+	s, _ := federationTestServer(t, config.FederationTarget{Name: "failed", URL: remote.URL})
+	start := time.Now()
+	s.branches(httptest.NewRecorder(), httptest.NewRequest("GET", "/api/v1/branches/status", nil))
+	if time.Since(start) > 450*time.Millisecond {
+		t.Fatal("dashboard retained long health timeout")
+	}
+	s.branchStatusAt = time.Now().Add(-6 * time.Second)
+	start = time.Now()
+	s.branches(httptest.NewRecorder(), httptest.NewRequest("GET", "/api/v1/branches/status", nil))
+	if time.Since(start) > 100*time.Millisecond || calls.Load() != 1 {
+		t.Fatal("dashboard retried a known failed target")
+	}
+}
+
 func TestFederationPreservesLogsAndPrometheusFormRequests(t *testing.T) {
 	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/logs") {
