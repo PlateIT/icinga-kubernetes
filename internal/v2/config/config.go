@@ -39,6 +39,8 @@ type Config struct {
 	MetricsURL                string
 	MetricsNamespace          string
 	MetricsTokenFile          string
+	ClusterServiceAccount     string
+	MetricsServiceAccount     string
 	MetricsCAFile             string
 	MetricsInsecure           bool
 	NotificationsURL          string
@@ -87,6 +89,8 @@ func Load() (Config, error) {
 		MetricsURL:                strings.TrimRight(os.Getenv("ICINGA_KUBERNETES_METRICS_URL"), "/"),
 		MetricsNamespace:          os.Getenv("ICINGA_KUBERNETES_METRICS_NAMESPACE"),
 		MetricsTokenFile:          os.Getenv("ICINGA_KUBERNETES_METRICS_TOKEN_FILE"),
+		ClusterServiceAccount:     os.Getenv("ICINGA_KUBERNETES_CLUSTER_SERVICE_ACCOUNT"),
+		MetricsServiceAccount:     os.Getenv("ICINGA_KUBERNETES_METRICS_SERVICE_ACCOUNT"),
 		MetricsCAFile:             os.Getenv("ICINGA_KUBERNETES_METRICS_CA_FILE"),
 		MetricsInsecure:           boolean("ICINGA_KUBERNETES_METRICS_INSECURE", false),
 		NotificationsURL:          strings.TrimRight(os.Getenv("ICINGA_KUBERNETES_NOTIFICATIONS_URL"), "/"),

@@ -497,3 +497,34 @@ func TestCollectorReadinessDistinguishesZeroRightsFromFailedDiscovery(t *testing
 		t.Fatal("an existing shard must remain ready during a partial discovery failure")
 	}
 }
+
+func TestSeparateIdentitiesForNamespaceDiscoveryAndRules(t *testing.T) {
+	base := kubernetesfake.NewSimpleClientset()
+	cluster := kubernetesfake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "external"}})
+	base.PrependReactor("list", "namespaces", func(a ktesting.Action) (bool, runtime.Object, error) {
+		t.Fatal("namespace discovery used workload identity")
+		return true, nil, nil
+	})
+	base.PrependReactor("create", "selfsubjectrulesreviews", func(a ktesting.Action) (bool, runtime.Object, error) {
+		return true, &authorizationv1.SelfSubjectRulesReview{Status: authorizationv1.SubjectRulesReviewStatus{ResourceRules: []authorizationv1.ResourceRule{{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"list", "watch"}}}}}, nil
+	})
+	cluster.PrependReactor("create", "selfsubjectrulesreviews", func(a ktesting.Action) (bool, runtime.Object, error) {
+		t.Fatal("namespace permission review used cluster identity")
+		return true, nil, nil
+	})
+	cluster.PrependReactor("create", "selfsubjectaccessreviews", func(a ktesting.Action) (bool, runtime.Object, error) {
+		return true, &authorizationv1.SelfSubjectAccessReview{Status: authorizationv1.SubjectAccessReviewStatus{Allowed: true}}, nil
+	})
+	c := &Collector{cfg: config.Config{LeaseNamespace: "monitoring"}, kubernetes: base, clusterKubernetes: cluster}
+	pods := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+	nodes := schema.GroupVersionResource{Version: "v1", Resource: "nodes"}
+	preferred := map[schema.GroupVersionResource]bool{pods: true, nodes: false}
+	rules, complete, err := c.effectiveRules(context.Background(), preferred)
+	if err != nil || !complete || !ruleAllows(rules["external"], pods, "list", "watch") {
+		t.Fatalf("namespace permissions: %v %v %v", rules, complete, err)
+	}
+	rights, complete, err := c.effectiveClusterPermissions(context.Background(), preferred)
+	if err != nil || !complete || !rights[nodes] {
+		t.Fatalf("cluster permissions: %v %v %v", rights, complete, err)
+	}
+}

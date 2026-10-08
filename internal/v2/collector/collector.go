@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/icinga/icinga-kubernetes/internal/v2/adapter"
 	"github.com/icinga/icinga-kubernetes/internal/v2/config"
+	"github.com/icinga/icinga-kubernetes/internal/v2/kubeauth"
 	"github.com/icinga/icinga-kubernetes/internal/v2/model"
 	"github.com/icinga/icinga-kubernetes/internal/v2/operational"
 	authorizationv1 "k8s.io/api/authorization/v1"
@@ -36,18 +37,20 @@ import (
 )
 
 type Collector struct {
-	cfg           config.Config
-	dynamic       dynamic.Interface
-	discovery     discovery.DiscoveryInterface
-	coordination  coordinationv1.CoordinationV1Interface
-	kubernetes    kubernetes.Interface
-	sender        *Sender
-	adapters      *adapter.Registry
-	metrics       *operational.Metrics
-	mu            sync.Mutex
-	shards        map[leaseShard]context.CancelFunc
-	shardStates   map[leaseShard]*shardState
-	appliedResync map[string]schema.GroupVersionResource
+	cfg               config.Config
+	dynamic           dynamic.Interface
+	clusterDynamic    dynamic.Interface
+	clusterKubernetes kubernetes.Interface
+	discovery         discovery.DiscoveryInterface
+	coordination      coordinationv1.CoordinationV1Interface
+	kubernetes        kubernetes.Interface
+	sender            *Sender
+	adapters          *adapter.Registry
+	metrics           *operational.Metrics
+	mu                sync.Mutex
+	shards            map[leaseShard]context.CancelFunc
+	shardStates       map[leaseShard]*shardState
+	appliedResync     map[string]schema.GroupVersionResource
 }
 
 type shard struct {
@@ -130,6 +133,19 @@ func Run(ctx context.Context, cfg config.Config, metrics *operational.Metrics) e
 	if err != nil {
 		return err
 	}
+	clusterClient := client
+	clusterDynamic := d
+	if cfg.ClusterServiceAccount != "" {
+		clusterConfig := kubeauth.Config(kcfg, kubeauth.New(client.CoreV1().ServiceAccounts(cfg.LeaseNamespace), cfg.ClusterServiceAccount))
+		clusterClient, err = kubernetes.NewForConfig(clusterConfig)
+		if err != nil {
+			return err
+		}
+		clusterDynamic, err = dynamic.NewForConfig(clusterConfig)
+		if err != nil {
+			return err
+		}
+	}
 	registry := adapter.New()
 	if err := registry.Load(cfg.AdapterFile); err != nil {
 		return err
@@ -141,7 +157,7 @@ func Run(ctx context.Context, cfg config.Config, metrics *operational.Metrics) e
 	if err != nil {
 		return err
 	}
-	c := &Collector{cfg: cfg, dynamic: d, discovery: disc, coordination: client.CoordinationV1(), kubernetes: client, sender: sender, adapters: registry, metrics: metrics, shards: map[leaseShard]context.CancelFunc{}, shardStates: map[leaseShard]*shardState{}, appliedResync: map[string]schema.GroupVersionResource{}}
+	c := &Collector{cfg: cfg, dynamic: d, clusterDynamic: clusterDynamic, clusterKubernetes: clusterClient, discovery: disc, coordination: client.CoordinationV1(), kubernetes: client, sender: sender, adapters: registry, metrics: metrics, shards: map[leaseShard]context.CancelFunc{}, shardStates: map[leaseShard]*shardState{}, appliedResync: map[string]schema.GroupVersionResource{}}
 	if err := c.sender.Heartbeat(ctx, cfg.ClusterName, time.Now().UTC()); err != nil {
 		slog.Warn("initial heartbeat failed", "error", err)
 	}
@@ -364,7 +380,7 @@ func (c *Collector) effectiveRules(ctx context.Context, preferred map[schema.Gro
 	namespaces := []string{c.cfg.LeaseNamespace}
 	complete := true
 	var reviewErr error
-	if list, err := c.kubernetes.CoreV1().Namespaces().List(ctx, metav1.ListOptions{}); err == nil {
+	if list, err := c.clusterClient().CoreV1().Namespaces().List(ctx, metav1.ListOptions{}); err == nil {
 		namespaces = namespaces[:0]
 		for _, namespace := range list.Items {
 			namespaces = append(namespaces, namespace.Name)
@@ -441,7 +457,7 @@ func (c *Collector) effectiveClusterPermissions(ctx context.Context, preferred m
 		}
 		permitted := true
 		for _, verb := range []string{"list", "watch"} {
-			review, err := c.kubernetes.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx,
+			review, err := c.clusterClient().AuthorizationV1().SelfSubjectAccessReviews().Create(ctx,
 				&authorizationv1.SelfSubjectAccessReview{Spec: authorizationv1.SelfSubjectAccessReviewSpec{
 					ResourceAttributes: &authorizationv1.ResourceAttributes{Group: gvr.Group, Version: gvr.Version, Resource: gvr.Resource, Verb: verb},
 				}}, metav1.CreateOptions{})
@@ -584,7 +600,7 @@ func (c *Collector) watch(ctx context.Context, target shard) {
 	gvr := target.GVR
 	var resource dynamic.ResourceInterface
 	if target.Namespace == "" {
-		resource = c.dynamic.Resource(gvr)
+		resource = c.clusterResources().Resource(gvr)
 	} else {
 		resource = c.dynamic.Resource(gvr).Namespace(target.Namespace)
 	}
@@ -838,4 +854,18 @@ func wait(ctx context.Context, d time.Duration) {
 	case <-ctx.Done():
 	case <-time.After(d):
 	}
+}
+
+// Defaults preserve the single-identity mode and existing test fixtures.
+func (c *Collector) clusterClient() kubernetes.Interface {
+	if c.clusterKubernetes != nil {
+		return c.clusterKubernetes
+	}
+	return c.kubernetes
+}
+func (c *Collector) clusterResources() dynamic.Interface {
+	if c.clusterDynamic != nil {
+		return c.clusterDynamic
+	}
+	return c.dynamic
 }

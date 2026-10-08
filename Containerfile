@@ -21,7 +21,7 @@ FROM base AS build
 RUN --mount=target=. \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go test ./internal/v2/notifier ./internal/v2/config ./internal/v2/adapter ./internal/v2/api ./internal/v2/collector ./internal/v2/store ./internal/v2/worker && \
+    CGO_ENABLED=0 go test ./internal/v2/kubeauth ./internal/v2/live ./internal/v2/notifier ./internal/v2/config ./internal/v2/adapter ./internal/v2/api ./internal/v2/collector ./internal/v2/store ./internal/v2/worker && \
     CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' -o /icinga-kubernetes ./cmd/icinga-kubernetes/main.go
 
 FROM scratch

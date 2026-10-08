@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/icinga/icinga-kubernetes/internal/v2/config"
+	"github.com/icinga/icinga-kubernetes/internal/v2/kubeauth"
 	"github.com/icinga/icinga-kubernetes/internal/v2/model"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,15 +27,17 @@ import (
 )
 
 type Gateway struct {
-	cfg        config.Config
-	dynamic    dynamic.Interface
-	discovery  discovery.DiscoveryInterface
-	kubernetes kubernetes.Interface
-	http       *http.Client
+	cfg            config.Config
+	dynamic        dynamic.Interface
+	clusterDynamic dynamic.Interface
+	metricsToken   *kubeauth.Source
+	discovery      discovery.DiscoveryInterface
+	kubernetes     kubernetes.Interface
+	http           *http.Client
 }
 
 func New(cfg config.Config) (*Gateway, error) {
-	if cfg.MetricsURL != "" && cfg.MetricsTokenFile != "" {
+	if cfg.MetricsURL != "" && cfg.MetricsTokenFile != "" && cfg.MetricsServiceAccount == "" {
 		token, err := os.ReadFile(cfg.MetricsTokenFile)
 		if err != nil {
 			return nil, fmt.Errorf("read metrics token: %w", err)
@@ -59,6 +62,18 @@ func New(cfg config.Config) (*Gateway, error) {
 	if err != nil {
 		return nil, err
 	}
+	clusterDynamic := d
+	if cfg.ClusterServiceAccount != "" {
+		clusterConfig := kubeauth.Config(kcfg, kubeauth.New(k.CoreV1().ServiceAccounts(cfg.LeaseNamespace), cfg.ClusterServiceAccount))
+		clusterDynamic, err = dynamic.NewForConfig(clusterConfig)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var metricsToken *kubeauth.Source
+	if cfg.MetricsServiceAccount != "" {
+		metricsToken = kubeauth.New(k.CoreV1().ServiceAccounts(cfg.LeaseNamespace), cfg.MetricsServiceAccount)
+	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: cfg.MetricsInsecure}
 	if cfg.MetricsCAFile != "" {
@@ -76,7 +91,7 @@ func New(cfg config.Config) (*Gateway, error) {
 		tlsConfig.RootCAs = roots
 	}
 	transport.TLSClientConfig = tlsConfig
-	return &Gateway{cfg: cfg, dynamic: d, discovery: disc, kubernetes: k, http: &http.Client{Timeout: 30 * time.Second, Transport: transport}}, nil
+	return &Gateway{cfg: cfg, dynamic: d, clusterDynamic: clusterDynamic, metricsToken: metricsToken, discovery: disc, kubernetes: k, http: &http.Client{Timeout: 30 * time.Second, Transport: transport}}, nil
 }
 
 func (g *Gateway) Manifest(ctx context.Context, r model.Resource) (map[string]any, error) {
@@ -100,7 +115,11 @@ func (g *Gateway) Manifest(ctx context.Context, r model.Resource) (map[string]an
 	if resourceName == "" {
 		return nil, fmt.Errorf("resource kind %s is no longer served", r.Kind)
 	}
-	client := g.dynamic.Resource(schema.GroupVersionResource{Group: mapGroup(r.Group), Version: r.Version, Resource: resourceName})
+	selected := g.dynamic
+	if !namespaced && g.clusterDynamic != nil {
+		selected = g.clusterDynamic
+	}
+	client := selected.Resource(schema.GroupVersionResource{Group: mapGroup(r.Group), Version: r.Version, Resource: resourceName})
 	var obj map[string]any
 	if namespaced {
 		item, err := client.Namespace(r.Namespace).Get(ctx, r.Name, metav1.GetOptions{})
@@ -176,7 +195,14 @@ func (g *Gateway) MetricsProxy(ctx context.Context, method, path string, request
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
-	if g.cfg.MetricsTokenFile != "" {
+	var delegatedToken string
+	if g.metricsToken != nil {
+		delegatedToken, err = g.metricsToken.Token(ctx)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+delegatedToken)
+	} else if g.cfg.MetricsTokenFile != "" {
 		token, err := os.ReadFile(g.cfg.MetricsTokenFile)
 		if err != nil {
 			return nil, fmt.Errorf("read metrics token: %w", err)
@@ -192,6 +218,9 @@ func (g *Gateway) MetricsProxy(ctx context.Context, method, path string, request
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized && g.metricsToken != nil {
+		g.metricsToken.Invalidate(delegatedToken)
+	}
 	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, (8<<20)+1))
 	if err != nil {
 		return nil, err
