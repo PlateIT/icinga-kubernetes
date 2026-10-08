@@ -133,6 +133,16 @@ func Run(ctx context.Context, cfg config.Config, metrics *operational.Metrics) e
 	if err != nil {
 		return err
 	}
+	// Up to 16 lease partitions per watched resource require more than the
+	// client-go default 5 requests/s. Keep lease traffic independent from RBAC
+	// discovery and resource lists so neither can starve leader renewal.
+	leaseConfig := rest.CopyConfig(kcfg)
+	leaseConfig.QPS, leaseConfig.Burst = 200, 400
+	leaseConfig.RateLimiter = nil
+	leaseClient, err := coordinationv1.NewForConfig(leaseConfig)
+	if err != nil {
+		return err
+	}
 	clusterClient := client
 	clusterDynamic := d
 	if cfg.ClusterServiceAccount != "" {
@@ -157,7 +167,7 @@ func Run(ctx context.Context, cfg config.Config, metrics *operational.Metrics) e
 	if err != nil {
 		return err
 	}
-	c := &Collector{cfg: cfg, dynamic: d, clusterDynamic: clusterDynamic, clusterKubernetes: clusterClient, discovery: disc, coordination: client.CoordinationV1(), kubernetes: client, sender: sender, adapters: registry, metrics: metrics, shards: map[leaseShard]context.CancelFunc{}, shardStates: map[leaseShard]*shardState{}, appliedResync: map[string]schema.GroupVersionResource{}}
+	c := &Collector{cfg: cfg, dynamic: d, clusterDynamic: clusterDynamic, clusterKubernetes: clusterClient, discovery: disc, coordination: leaseClient, kubernetes: client, sender: sender, adapters: registry, metrics: metrics, shards: map[leaseShard]context.CancelFunc{}, shardStates: map[leaseShard]*shardState{}, appliedResync: map[string]schema.GroupVersionResource{}}
 	if err := c.sender.Heartbeat(ctx, cfg.ClusterName, time.Now().UTC()); err != nil {
 		slog.Warn("initial heartbeat failed", "error", err)
 	}
