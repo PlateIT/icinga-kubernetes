@@ -174,6 +174,16 @@ durable-spool files and bytes, replay and backpressure. Spool capacity is
 tracked under the existing replay lock, so an outage does not rescan an
 ever-growing directory for every batch.
 
+Before each spool write the collector also checks the filesystem, keeping at
+least 5% (minimum 64 MiB) free space and 1% (minimum 128) free inodes on Linux.
+This accounts for small-file allocation overhead that logical JSON byte counts
+do not measure. `ENOSPC` and quota exhaustion enter cancellable backpressure,
+including errors occurring after the capacity check. Queued batches are never
+deleted to make room: successful API delivery drains them. Direct delivery can
+resume even if another writer keeps the filesystem full. Capacity retries wait
+one second, including when the spool is empty. The `collector_spool_blocked`
+metric (with the `icinga_kubernetes_` prefix) signals storage backpressure.
+
 ## Reproducible API load regression
 
 `cmd/icinga-kubernetes-loadgen` generates deterministic Pod inventory, spreads

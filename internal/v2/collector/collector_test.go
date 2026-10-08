@@ -323,7 +323,8 @@ func TestSpoolCapacityIsFailClosed(t *testing.T) {
 	for _, expected := range []string{
 		"icinga_kubernetes_collector_spool_files 1",
 		"icinga_kubernetes_collector_spool_bytes 8",
-		"icinga_kubernetes_collector_backpressure_total 1",
+		"icinga_kubernetes_collector_backpressure_total 0",
+		"icinga_kubernetes_collector_spool_blocked 1",
 	} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Errorf("metrics do not contain %q:\n%s", expected, response.Body.String())

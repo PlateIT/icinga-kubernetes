@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,6 +28,7 @@ type Sender struct {
 	metrics    *operational.Metrics
 	spoolFiles int64
 	spoolBytes int64
+	diskSpace  func(string) (spoolDiskSpace, error)
 }
 
 const maxIngestBatchBytes = (2 << 20) - (64 << 10)
@@ -36,7 +38,7 @@ func NewSender(cfg config.Config, provided ...*operational.Metrics) (*Sender, er
 	if len(provided) > 0 && provided[0] != nil {
 		metrics = provided[0]
 	}
-	sender := &Sender{cfg: cfg, client: &http.Client{Timeout: 30 * time.Second}, metrics: metrics}
+	sender := &Sender{cfg: cfg, client: &http.Client{Timeout: 30 * time.Second}, metrics: metrics, diskSpace: readSpoolDiskSpace}
 	if err := os.MkdirAll(cfg.SpoolPath, 0700); err != nil {
 		return nil, fmt.Errorf("initialize collector spool: %w", err)
 	}
@@ -112,6 +114,9 @@ func splitBatch(batch model.IngestBatch, limit int) ([]model.IngestBatch, error)
 
 func (s *Sender) spoolWithBackpressure(ctx context.Context, batch model.IngestBatch) error {
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		err := s.spool(batch)
 		if err == nil {
 			return nil
@@ -122,8 +127,10 @@ func (s *Sender) spoolWithBackpressure(ctx context.Context, batch model.IngestBa
 		s.metrics.Backpressure()
 		// Stop consuming the watch until durable space is available. Kubernetes
 		// may close the blocked watch; the collector then performs a full list.
-		if err := s.replay(ctx); err == nil {
-			continue
+		// An empty spool may share an exhausted filesystem; avoid a busy loop.
+		if s.replay(ctx) == nil && s.post(ctx, batch) == nil {
+			s.metrics.SetSpoolBlocked(false)
+			return nil
 		}
 		select {
 		case <-ctx.Done():
@@ -177,12 +184,22 @@ func (s *Sender) post(ctx context.Context, batch model.IngestBatch) error {
 		return fmt.Errorf("ingest API returned %s", resp.Status)
 	}
 	s.metrics.Success()
+	s.metrics.SetSpoolBlocked(false)
 	return nil
 }
 
-func (s *Sender) spool(batch model.IngestBatch) error {
+func (s *Sender) spool(batch model.IngestBatch) (result error) {
 	s.replayMu.Lock()
 	defer s.replayMu.Unlock()
+	defer func() {
+		// A quota or another writer may exhaust storage after preflight.
+		if errors.Is(result, syscall.ENOSPC) || errors.Is(result, syscall.EDQUOT) {
+			result = fmt.Errorf("%w: %v", errSpoolFull, result)
+		}
+		if errors.Is(result, errSpoolFull) {
+			s.metrics.SetSpoolBlocked(true)
+		}
+	}()
 	if err := os.MkdirAll(s.cfg.SpoolPath, 0700); err != nil {
 		return err
 	}
@@ -192,6 +209,13 @@ func (s *Sender) spool(batch model.IngestBatch) error {
 	}
 	if s.spoolBytes+int64(len(b)) > s.cfg.SpoolMaxBytes {
 		return errSpoolFull
+	}
+	space, err := s.diskSpace(s.cfg.SpoolPath)
+	if err != nil {
+		return fmt.Errorf("inspect spool filesystem: %w", err)
+	}
+	if !space.canWrite(uint64(len(b))) {
+		return fmt.Errorf("%w: filesystem reserve reached", errSpoolFull)
 	}
 	name := time.Now().UTC().Format("20060102T150405.000000000") + "-" + uuid.NewString() + ".json"
 	tmp := filepath.Join(s.cfg.SpoolPath, "."+name)
@@ -223,6 +247,7 @@ func (s *Sender) spool(batch model.IngestBatch) error {
 	s.spoolFiles++
 	s.spoolBytes += int64(len(b))
 	s.metrics.Spooled(int64(len(b)))
+	s.metrics.SetSpoolBlocked(false)
 	return nil
 }
 

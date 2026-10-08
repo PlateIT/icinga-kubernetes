@@ -23,6 +23,7 @@ type Metrics struct {
 	activeLeases    atomic.Int64
 	spoolFiles      atomic.Int64
 	spoolBytes      atomic.Int64
+	spoolBlocked    atomic.Bool
 	lastSuccessUnix atomic.Int64
 }
 
@@ -37,18 +38,20 @@ func (m *Metrics) Spooled(bytes int64) {
 	m.spoolBytes.Add(bytes)
 }
 func (m *Metrics) Replayed(bytes int64) {
+	m.spoolBlocked.Store(false)
 	m.replayedBatches.Add(1)
 	m.spoolFiles.Add(-1)
 	m.spoolBytes.Add(-bytes)
 	m.Success()
 }
-func (m *Metrics) Backpressure()               { m.backpressure.Add(1) }
-func (m *Metrics) Resync()                     { m.resyncs.Add(1) }
-func (m *Metrics) SetActiveShards(count int)   { m.activeShards.Store(int64(count)) }
-func (m *Metrics) LeaseAcquired()              { m.activeLeases.Add(1) }
-func (m *Metrics) LeaseReleased()              { m.activeLeases.Add(-1) }
-func (m *Metrics) SetSpool(files, bytes int64) { m.spoolFiles.Store(files); m.spoolBytes.Store(bytes) }
-func (m *Metrics) Success()                    { m.lastSuccessUnix.Store(time.Now().Unix()) }
+func (m *Metrics) SetSpoolBlocked(blocked bool) { m.spoolBlocked.Store(blocked) }
+func (m *Metrics) Backpressure()                { m.backpressure.Add(1) }
+func (m *Metrics) Resync()                      { m.resyncs.Add(1) }
+func (m *Metrics) SetActiveShards(count int)    { m.activeShards.Store(int64(count)) }
+func (m *Metrics) LeaseAcquired()               { m.activeLeases.Add(1) }
+func (m *Metrics) LeaseReleased()               { m.activeLeases.Add(-1) }
+func (m *Metrics) SetSpool(files, bytes int64)  { m.spoolFiles.Store(files); m.spoolBytes.Store(bytes) }
+func (m *Metrics) Success()                     { m.lastSuccessUnix.Store(time.Now().Unix()) }
 
 func (m *Metrics) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -74,6 +77,7 @@ func writeJSONStatus(w http.ResponseWriter, status int, body string) {
 
 func (m *Metrics) writeMetrics(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	fmt.Fprintf(w, "# HELP icinga_kubernetes_collector_spool_blocked Spool writes stopped by storage capacity.\n# TYPE icinga_kubernetes_collector_spool_blocked gauge\nicinga_kubernetes_collector_spool_blocked %d\n", boolNumber(m.spoolBlocked.Load()))
 	role := m.Role
 	fmt.Fprintf(w, "# HELP icinga_kubernetes_role_ready Whether the role has completed initialization.\n# TYPE icinga_kubernetes_role_ready gauge\nicinga_kubernetes_role_ready{role=%q} %d\n", role, boolNumber(m.ready.Load()))
 	fmt.Fprintf(w, "# HELP icinga_kubernetes_role_uptime_seconds Process uptime.\n# TYPE icinga_kubernetes_role_uptime_seconds gauge\nicinga_kubernetes_role_uptime_seconds{role=%q} %.3f\n", role, time.Since(m.started).Seconds())
