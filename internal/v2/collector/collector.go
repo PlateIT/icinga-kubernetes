@@ -121,6 +121,9 @@ func Run(ctx context.Context, cfg config.Config, metrics *operational.Metrics) e
 		return err
 	}
 	kcfg.UserAgent = "icinga-kubernetes-collector/2"
+	// Bound the initial list/watch fan-out without imposing client-go's
+	// five-request default on large namespace inventories.
+	kcfg.QPS, kcfg.Burst = 50, 100
 	d, err := dynamic.NewForConfig(kcfg)
 	if err != nil {
 		return err
