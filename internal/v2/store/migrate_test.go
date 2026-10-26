@@ -26,6 +26,7 @@ func TestInitialMigrationIsAtomicPortableGreenfieldSchema(t *testing.T) {
 		t.Fatal("initial schema does not publish exactly migration version 1")
 	}
 	for _, required := range []string{
+		`(?is)CREATE INDEX resource_shard_tombstone_observed_idx\s+ON resource\s*\(cluster_name,\s*shard,\s*observed_at\).*?WHERE deleted_at IS NOT NULL`,
 		`(?is)CREATE INDEX ingest_event_shard_order_idx\s+ON ingest_event\s*\(cluster_name,\s*shard,\s*received_at,\s*event_id\).*?WHERE applied_at IS NULL`,
 		`(?is)CREATE INDEX resource_list_idx\s+ON resource\s*\(cluster_name,\s*sort_id\).*?WHERE deleted_at IS NULL`,
 		`(?is)CREATE INDEX resource_kind_list_idx\s+ON resource\s*\(cluster_name,\s*kind,\s*sort_id\).*?WHERE deleted_at IS NULL`,

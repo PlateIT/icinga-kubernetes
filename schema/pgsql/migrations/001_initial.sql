@@ -85,6 +85,8 @@ CREATE INDEX resource_tombstone_idx ON resource (deleted_at)
     WHERE deleted_at IS NOT NULL;
 CREATE INDEX resource_shard_observed_idx ON resource (cluster_name, shard, observed_at)
     WHERE deleted_at IS NULL;
+CREATE INDEX resource_shard_tombstone_observed_idx ON resource (cluster_name, shard, observed_at)
+    WHERE deleted_at IS NOT NULL;
 
 CREATE TABLE resource_owner (
     resource_id uuid NOT NULL REFERENCES resource(id) ON DELETE CASCADE,

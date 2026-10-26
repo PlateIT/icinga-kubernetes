@@ -22,6 +22,21 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		if version != 1 {
 			return fmt.Errorf("database schema version %d is not supported; run the matching migration job", version)
 		}
+		// Existing version-1 installations also need the tombstone watermark
+		// index. Build it without blocking normal resource writes.
+		if _, err := db.ExecContext(ctx, `CREATE INDEX CONCURRENTLY IF NOT EXISTS
+			resource_shard_tombstone_observed_idx ON resource (cluster_name, shard, observed_at)
+			WHERE deleted_at IS NOT NULL`); err != nil {
+			return fmt.Errorf("ensure tombstone reconciliation index: %w", err)
+		}
+		var valid bool
+		if err := db.QueryRowContext(ctx, `SELECT indisvalid AND indisready FROM pg_index
+			WHERE indexrelid='resource_shard_tombstone_observed_idx'::regclass`).Scan(&valid); err != nil {
+			return fmt.Errorf("check tombstone reconciliation index: %w", err)
+		}
+		if !valid {
+			return fmt.Errorf("tombstone reconciliation index is invalid; drop the incomplete index concurrently and rerun migration")
+		}
 		return nil
 	}
 	if _, err := db.ExecContext(ctx, pgsqlschema.InitialMigration); err != nil {
