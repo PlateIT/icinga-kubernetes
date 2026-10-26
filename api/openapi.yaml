@@ -957,5 +957,8 @@ components:
         database: {type: string}
         oldestPendingEvent: {type: string, format: date-time, nullable: true}
         pendingEvents: {type: integer}
+        pendingNotifications: {type: integer}
+        failedNotifications: {type: integer}
+        oldestPendingNotification: {type: string, format: date-time, nullable: true}
         lastAppliedAt: {type: string, format: date-time, nullable: true}
         freshness: {type: string, enum: [live, stale, unavailable]}
