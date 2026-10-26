@@ -16,6 +16,9 @@ CREATE TABLE ingest_event (
     attempts integer NOT NULL DEFAULT 0,
     applied_at timestamptz,
     error text
+) WITH (
+    autovacuum_vacuum_scale_factor=0.02, autovacuum_vacuum_threshold=1000,
+    autovacuum_analyze_scale_factor=0.02, autovacuum_analyze_threshold=1000
 );
 CREATE INDEX ingest_event_shard_order_idx
     ON ingest_event (cluster_name, shard, received_at, event_id)

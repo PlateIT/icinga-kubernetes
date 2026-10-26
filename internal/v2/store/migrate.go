@@ -40,6 +40,16 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		if _, err := db.ExecContext(ctx, `ALTER TABLE ingest_shard_head ADD COLUMN IF NOT EXISTS reconciled_at timestamptz`); err != nil {
 			return fmt.Errorf("ensure shard reconciliation watermark: %w", err)
 		}
+		// Applying events removes them from the pending partial index. The
+		// default 20% vacuum threshold lets dead entries accumulate ahead of
+		// its oldest pending rows, making even small LIMIT queries expensive.
+		// Keep maintenance proportional to this high-churn queue, not to all
+		// databases on the shared PostgreSQL instance.
+		if _, err := db.ExecContext(ctx, `ALTER TABLE ingest_event SET (
+			autovacuum_vacuum_scale_factor=0.02, autovacuum_vacuum_threshold=1000,
+			autovacuum_analyze_scale_factor=0.02, autovacuum_analyze_threshold=1000)`); err != nil {
+			return fmt.Errorf("ensure ingest queue maintenance: %w", err)
+		}
 		return nil
 	}
 	if _, err := db.ExecContext(ctx, pgsqlschema.InitialMigration); err != nil {
