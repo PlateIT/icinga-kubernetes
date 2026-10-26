@@ -44,6 +44,10 @@ func run(ctx context.Context, cfg config.Config, s eventStore, identity string, 
 	idle := time.NewTimer(0)
 	defer idle.Stop()
 	for {
+		// A ready zero-duration timer must not win repeatedly against shutdown.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
