@@ -17,9 +17,10 @@ type eventStore interface {
 }
 
 type intervals struct {
-	cleanup time.Duration
-	idle    time.Duration
-	retry   time.Duration
+	cleanup   time.Duration
+	idle      time.Duration
+	retry     time.Duration
+	operation time.Duration
 }
 
 var productionIntervals = intervals{cleanup: 10 * time.Minute, idle: 250 * time.Millisecond, retry: time.Second}
@@ -31,7 +32,10 @@ func Run(ctx context.Context, cfg config.Config, s store.Store, identity string,
 }
 
 func run(ctx context.Context, cfg config.Config, s eventStore, identity string, metrics *operational.Metrics, waits intervals) error {
-	metrics.SetReady(true)
+	if waits.operation <= 0 {
+		waits.operation = 30 * time.Second
+	}
+	metrics.SetReady(false)
 	defer metrics.SetReady(false)
 	cleanup := time.NewTicker(waits.cleanup)
 	defer cleanup.Stop()
@@ -57,11 +61,14 @@ func run(ctx context.Context, cfg config.Config, s eventStore, identity string, 
 				slog.Error("event recovery reconciliation failed", "error", err)
 			}
 		case <-idle.C:
-			processed, err := s.ApplyShard(ctx, identity, applyShardSize)
+			operationCtx, cancel := context.WithTimeout(ctx, waits.operation)
+			processed, err := s.ApplyShard(operationCtx, identity, applyShardSize)
+			cancel()
 			if processed > 0 {
 				metrics.Processed(uint64(processed))
 			}
 			if err != nil {
+				metrics.SetReady(false)
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
@@ -74,6 +81,7 @@ func run(ctx context.Context, cfg config.Config, s eventStore, identity string, 
 				}
 				continue
 			}
+			metrics.SetReady(true)
 			if processed > 0 {
 				idle.Reset(0)
 			} else {

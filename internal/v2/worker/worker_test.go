@@ -168,3 +168,80 @@ func TestWorkerDoesNotReportControlledShutdownAsCleanupFailure(t *testing.T) {
 		t.Fatalf("controlled cleanup shutdown incremented worker errors:\n%s", body)
 	}
 }
+
+func TestWorkerReadinessTracksDatabaseRecoveryWithoutRestart(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	metrics := operational.New("worker")
+	store := &fakeStore{applyResults: []struct {
+		processed int
+		err       error
+	}{{}, {err: errors.New("database unavailable")}, {}}}
+	expected := []int{http.StatusServiceUnavailable, http.StatusOK, http.StatusServiceUnavailable, http.StatusOK}
+	store.onApply = func(call int) {
+		if call > len(expected) {
+			t.Fatal("worker failed to stop after recovery")
+		}
+		response := httptest.NewRecorder()
+		metrics.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
+		if response.Code != expected[call-1] {
+			t.Errorf("before database call %d: readiness %d, want %d", call, response.Code, expected[call-1])
+		}
+		response = httptest.NewRecorder()
+		metrics.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/health/live", nil))
+		if response.Code != http.StatusOK {
+			t.Errorf("database failure must not fail liveness: %d", response.Code)
+		}
+		if call == len(expected) {
+			cancel()
+		}
+	}
+	err := run(ctx, config.Config{}, store, "worker-recovery", metrics, intervals{
+		cleanup: time.Hour, idle: time.Millisecond, retry: time.Millisecond,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("run error = %v", err)
+	}
+	if store.applyCalls != 4 {
+		t.Fatalf("database calls = %d, want 4", store.applyCalls)
+	}
+}
+
+type timeoutRecoveryStore struct {
+	fakeStore
+	calls  int
+	cancel context.CancelFunc
+}
+
+func (s *timeoutRecoveryStore) ApplyShard(ctx context.Context, _ string, _ int) (int, error) {
+	s.calls++
+	if s.calls == 1 {
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+	s.cancel()
+	return 1, nil
+}
+
+func TestWorkerRetriesTimedOutDatabaseOperation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	s := &timeoutRecoveryStore{cancel: cancel}
+	metrics := operational.New("worker")
+	err := run(ctx, config.Config{}, s, "worker-timeout", metrics, intervals{
+		cleanup: time.Hour, idle: time.Millisecond, retry: time.Millisecond, operation: 5 * time.Millisecond,
+	})
+	if !errors.Is(err, context.Canceled) || s.calls != 2 {
+		t.Fatalf("timed-out operation did not recover: calls=%d error=%v", s.calls, err)
+	}
+	response := httptest.NewRecorder()
+	metrics.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	for _, want := range []string{
+		`icinga_kubernetes_role_processed_total{role="worker"} 1`,
+		`icinga_kubernetes_role_errors_total{role="worker"} 1`,
+	} {
+		if !strings.Contains(response.Body.String(), want) {
+			t.Errorf("missing metric %s", want)
+		}
+	}
+}

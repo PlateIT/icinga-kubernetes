@@ -168,7 +168,7 @@ The Helm chart installs alerts for loss of API quorum, database failures,
 ingest backlog, sustained 5xx responses, saturation and p99 latency.
 
 Worker and collector roles expose a separate operations listener on `:8081`
-with `/health/live`, `/health/ready` and `/metrics`. Its bounded metrics cover
+with `/health/live`, `/health/ready` and `/metrics`. Worker readiness starts false and follows successful database polling; database errors make it false until a later successful poll. Ingest transactions have a 30-second deadline and are retried without restarting the worker. Liveness remains independent of database availability. Its bounded metrics cover
 role readiness, progress and errors plus collector shard/lease ownership,
 durable-spool files and bytes, replay and backpressure. Spool capacity is
 tracked under the existing replay lock, so an outage does not rescan an
