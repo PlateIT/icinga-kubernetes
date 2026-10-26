@@ -37,6 +37,9 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		if !valid {
 			return fmt.Errorf("tombstone reconciliation index is invalid; drop the incomplete index concurrently and rerun migration")
 		}
+		if _, err := db.ExecContext(ctx, `ALTER TABLE ingest_shard_head ADD COLUMN IF NOT EXISTS reconciled_at timestamptz`); err != nil {
+			return fmt.Errorf("ensure shard reconciliation watermark: %w", err)
+		}
 		return nil
 	}
 	if _, err := db.ExecContext(ctx, pgsqlschema.InitialMigration); err != nil {
@@ -55,6 +58,9 @@ func CheckSchema(ctx context.Context, db *sql.DB) error {
 	}
 	if version != 1 {
 		return fmt.Errorf("schema version %d, expected 1", version)
+	}
+	if _, err := db.ExecContext(ctx, `SELECT reconciled_at FROM ingest_shard_head LIMIT 0`); err != nil {
+		return fmt.Errorf("shard reconciliation watermark missing; run the migrate role: %w", err)
 	}
 	return nil
 }

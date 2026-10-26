@@ -24,6 +24,11 @@ Application roles never create, drop or mutate database schema.
 - Collectors write only through the API. The API is the sole database boundary.
 - Ingestion is durable and idempotent. Per-shard ordering plus reconciliation
   markers recover deletions missed during outages.
+- A retained timestamp per shard rejects observations older than a completed
+  reconciliation, even after resource tombstones expire. Relists update this
+  one marker instead of rewriting all historical tombstones. Run the migrate
+  role before deploying workers that use the `reconciled_at` column; existing
+  resource timestamps remain authoritative during the transition.
 - Failed API deliveries are stored atomically in a persistent local spool and
   replayed in order.
 - Effective namespace permissions are refreshed every five minutes. Namespace

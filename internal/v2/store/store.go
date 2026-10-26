@@ -397,18 +397,33 @@ func (s Store) ApplyShard(ctx context.Context, _ string, limit int) (int, error)
 }
 
 func applyResource(ctx context.Context, tx *sql.Tx, action, shard string, r model.Resource) error {
+	// PostgreSQL timestamps have microsecond precision. Compare at that same
+	// precision so replaying an equal nanosecond timestamp is not falsely stale.
+	r.ObservedAt = r.ObservedAt.Round(time.Microsecond)
 	if action == "heartbeat" {
 		return nil
 	}
+	// Retain one watermark per shard instead of rewriting every old tombstone
+	// on each relist. It also protects resources whose tombstone was pruned.
+	var watermark sql.NullTime
+	err := tx.QueryRowContext(ctx, `SELECT reconciled_at FROM ingest_shard_head
+		WHERE cluster_name=$1 AND shard=$2`, r.Cluster, shard).Scan(&watermark)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if watermark.Valid && r.ObservedAt.Before(watermark.Time) {
+		return nil
+	}
 	if action == "reconcile" {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO ingest_shard_head(cluster_name,shard,reconciled_at)
+			VALUES($1,$2,$3) ON CONFLICT(cluster_name,shard) DO UPDATE
+			SET reconciled_at=GREATEST(ingest_shard_head.reconciled_at,excluded.reconciled_at)`, r.Cluster, shard, r.ObservedAt); err != nil {
+			return err
+		}
 		_, err := tx.ExecContext(ctx, `WITH removed AS (
 			UPDATE resource SET deleted_at=clock_timestamp(),observed_at=$3,changed_at=clock_timestamp()
 			WHERE cluster_name=$1 AND shard=$2 AND deleted_at IS NULL AND observed_at < $3
 			RETURNING id,cluster_name,api_group,api_version,kind,namespace,name,labels,state,reason
-		), watermarked AS (
-			UPDATE resource SET observed_at=$3
-			WHERE cluster_name=$1 AND shard=$2 AND deleted_at IS NOT NULL AND observed_at < $3
-			RETURNING id
 		), queued AS (
 			INSERT INTO notification_outbox(resource_id,cluster_name,api_group,api_version,kind,namespace,name,labels,state,reason,action)
 			SELECT id,cluster_name,api_group,api_version,kind,namespace,name,labels,state,reason,'delete'
@@ -419,7 +434,7 @@ func applyResource(ctx context.Context, tx *sql.Tx, action, shard string, r mode
 			SELECT id,cluster_name,'delete' FROM removed
 			RETURNING resource_id
 		)
-		SELECT (SELECT count(*) FROM queued)+(SELECT count(*) FROM changed)+(SELECT count(*) FROM watermarked)`, r.Cluster, shard, r.ObservedAt)
+		SELECT (SELECT count(*) FROM queued)+(SELECT count(*) FROM changed)`, r.Cluster, shard, r.ObservedAt)
 		return err
 	}
 	if action != "delete" {
@@ -456,7 +471,7 @@ func applyResource(ctx context.Context, tx *sql.Tx, action, shard string, r mode
 		now := time.Now().UTC()
 		deletedAt = &now
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO resource(id,cluster_name,shard,kubernetes_uid,api_group,api_version,kind,namespace,name,
+	_, err = tx.ExecContext(ctx, `INSERT INTO resource(id,cluster_name,shard,kubernetes_uid,api_group,api_version,kind,namespace,name,
 		resource_version,labels,annotations,conditions,summary,state,reason,observed_at,deleted_at)
 		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
 		ON CONFLICT(id) DO UPDATE SET shard=excluded.shard,kubernetes_uid=excluded.kubernetes_uid,
@@ -841,7 +856,7 @@ func (s Store) Cleanup(ctx context.Context, eventRetention, tombstoneRetention, 
 		{"tombstones", `DELETE FROM resource WHERE deleted_at < clock_timestamp()-$1::interval`, tombstoneRetention},
 		{"history", `DELETE FROM change_log WHERE changed_at < clock_timestamp()-$1::interval`, historyRetention},
 		{"delivered notifications", `DELETE FROM notification_outbox WHERE delivered_at IS NOT NULL AND delivered_at < clock_timestamp()-$1::interval`, historyRetention},
-		{"shard metadata", `DELETE FROM ingest_shard_head WHERE pending_events=0 AND last_applied_at < clock_timestamp()-$1::interval`, historyRetention},
+		{"shard metadata", `DELETE FROM ingest_shard_head WHERE pending_events=0 AND reconciled_at IS NULL AND last_applied_at < clock_timestamp()-$1::interval`, historyRetention},
 		{"inbox", `DELETE FROM ingest_event WHERE applied_at < clock_timestamp()-$1::interval`, historyRetention},
 		{"federation cache", `DELETE FROM federation_cache WHERE fetched_at < clock_timestamp()-$1::interval`, federationCacheRetention},
 	}

@@ -30,6 +30,7 @@ CREATE TABLE ingest_shard_head (
     event_id uuid UNIQUE,
     pending_events bigint NOT NULL DEFAULT 0 CHECK (pending_events >= 0),
     last_applied_at timestamptz,
+    reconciled_at timestamptz,
     PRIMARY KEY (cluster_name, shard)
 );
 

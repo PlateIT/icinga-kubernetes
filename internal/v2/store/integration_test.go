@@ -522,8 +522,42 @@ func TestPostgreSQLLifecycle(t *testing.T) {
 		if scanErr := db.QueryRowContext(ctx, `SELECT deleted_at,observed_at,state FROM resource WHERE id=$1`, resourceID).Scan(&deletedAt, &observedAt, &state); scanErr != nil {
 			t.Fatal(scanErr)
 		}
-		if !deletedAt.Valid || !observedAt.Equal(latestCutoff) || state != string(model.StateOK) {
+		if !deletedAt.Valid || !observedAt.Equal(firstCutoff) || state != string(model.StateOK) {
 			t.Fatalf("stale replay changed reconciled resource: deleted=%v observed=%s state=%s", deletedAt.Valid, observedAt, state)
+		}
+		var cutoff time.Time
+		if err := db.QueryRowContext(ctx, `SELECT reconciled_at FROM ingest_shard_head WHERE cluster_name=$1 AND shard=$2`, cluster, shard).Scan(&cutoff); err != nil || !cutoff.Equal(latestCutoff) {
+			t.Fatalf("shard watermark=%s err=%v", cutoff, err)
+		}
+		// Pruning the tombstone must not let an old spool resurrect the object.
+		if _, err := db.ExecContext(ctx, `DELETE FROM resource WHERE id=$1`, resourceID); err != nil {
+			t.Fatal(err)
+		}
+		tx, txErr = db.BeginTx(ctx, nil)
+		if txErr != nil {
+			t.Fatal(txErr)
+		}
+		defer tx.Rollback()
+		if err := applyResource(ctx, tx, "upsert", shard, resource); err != nil {
+			t.Fatal(err)
+		}
+		var count int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM resource WHERE id=$1`, resourceID).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("stale spool recreated pruned resource: count=%d err=%v", count, err)
+		}
+		// An older relist must not move the shared watermark backwards.
+		if err := applyResource(ctx, tx, "reconcile", shard, model.Resource{Cluster: cluster, ObservedAt: firstCutoff}); err != nil {
+			t.Fatal(err)
+		}
+		resource.ObservedAt = latestCutoff.Add(time.Second)
+		if err := applyResource(ctx, tx, "upsert", shard, resource); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM resource WHERE id=$1 AND deleted_at IS NULL`, resourceID).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("fresh observation rejected: count=%d err=%v", count, err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
 		}
 	})
 }
