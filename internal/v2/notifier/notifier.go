@@ -169,7 +169,7 @@ func makeEvent(record Record, webURL string) *event.Event {
 		ID: types.MakeUUID(uuid.NewSHA1(uuid.NameSpaceOID, identity)), Name: displayName,
 		URL:      strings.TrimRight(webURL, "/") + "/kubernetes/resources/show?" + query.Encode(),
 		Tags:     map[string]string{"cluster": record.Cluster, "resource_id": record.ResourceID},
-		Severity: severity(record.State), Message: message,
+		Severity: severity(record.State), Summary: eventSummary(message, record.State), Message: message,
 		Incident: types.MakeBool(true),
 		Relations: map[string]any{"kubernetes": map[string]any{
 			"cluster": record.Cluster, "group": record.Group, "version": record.Version,
@@ -184,16 +184,30 @@ func makeEvent(record Record, webURL string) *event.Event {
 	return ev
 }
 
+// eventSummary keeps the full diagnostic output in Message while complying
+// with the Notifications API's single-line, Unicode-aware summary contract.
+func eventSummary(message, state string) string {
+	summary := strings.TrimSpace(strings.SplitN(strings.ReplaceAll(message, "\r", "\n"), "\n", 2)[0])
+	if summary == "" {
+		summary = "Kubernetes resource state is " + state
+	}
+	runes := []rune(summary)
+	if len(runes) > event.MaxSummaryLen {
+		summary = string(runes[:event.MaxSummaryLen])
+	}
+	return summary
+}
+
 func severity(state string) event.Severity {
 	switch strings.ToLower(state) {
 	case "ok":
 		return event.SeverityOK
 	case "critical":
-		return event.SeverityCrit
+		return event.SeverityCritical
 	case "warning", "unknown":
 		return event.SeverityWarning
 	default:
-		return event.SeverityNotice
+		return event.SeverityWarning
 	}
 }
 

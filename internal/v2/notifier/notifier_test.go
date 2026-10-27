@@ -86,3 +86,18 @@ func TestMakeEventClosesRecoveredAndDeletedResources(t *testing.T) {
 		}
 	}
 }
+
+func TestNotificationSummaryContract(t *testing.T) {
+	for _, reason := range []string{"Unavailable replicas\nFull diagnostics", "\r\nDetails", strings.Repeat("?", 1100), ""} {
+		ev := makeEvent(Record{ID: 1, ResourceID: "resource", Cluster: "cluster", Kind: "Pod", Name: "pod", State: "critical", Reason: reason}, "https://icinga.example.test")
+		if err := ev.Validate(); err != nil {
+			t.Fatalf("invalid Notifications payload: %v", err)
+		}
+		if strings.ContainsAny(ev.Summary, "\r\n") || ev.Summary == "" {
+			t.Fatalf("invalid summary: %q", ev.Summary)
+		}
+		if reason != "" && ev.Message != reason {
+			t.Fatal("full diagnostic output was changed")
+		}
+	}
+}

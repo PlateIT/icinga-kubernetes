@@ -5,7 +5,7 @@ go 1.27
 require (
 	github.com/getkin/kin-openapi v0.146.0
 	github.com/google/uuid v1.6.0
-	github.com/icinga/icinga-go-library v0.9.1-0.20260904123307-5937dfc8fd5b
+	github.com/icinga/icinga-go-library v0.9.1-0.20261022075534-0a1f3d0c0b67
 	github.com/lib/pq v1.12.3
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.71.0
 	go.opentelemetry.io/otel v1.46.0
