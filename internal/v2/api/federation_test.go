@@ -293,3 +293,65 @@ func TestLocalGraphAndPartialBatchSurviveUnreachableSatellite(t *testing.T) {
 		t.Fatal("legacy batch falsely confirmed remote object deletion")
 	}
 }
+
+// A dashboard opened after an idle period must check readiness before turning
+// an old health snapshot into an outage. An unreachable target still has a
+// short deadline and must not inherit the previously healthy status.
+func TestBranchStatusRevalidatesAgedHealthCache(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		age     time.Duration
+		healthy bool
+	}{
+		{"stale-healthy", 31 * time.Second, true},
+		{"expired-healthy", 3 * time.Minute, true},
+		{"expired-unreachable", 3 * time.Minute, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var healthy atomic.Bool
+			healthy.Store(true)
+			remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !healthy.Load() {
+					<-r.Context().Done()
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"status":"ready"}`))
+			}))
+			defer remote.Close()
+			s, state := federationTestServer(t, config.FederationTarget{Name: "remote", URL: remote.URL})
+			probe := func() branchStatus {
+				t.Helper()
+				w := httptest.NewRecorder()
+				s.branches(w, httptest.NewRequest("GET", "/api/v1/branches/status", nil))
+				var body struct {
+					Items []branchStatus `json:"items"`
+				}
+				if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &body) != nil || len(body.Items) != 1 {
+					t.Fatalf("invalid branch status: %s", w.Body.String())
+				}
+				return body.Items[0]
+			}
+			if probe().Freshness != "live" {
+				t.Fatal("initial readiness failed")
+			}
+			state.mu.Lock()
+			state.fetchedAt = time.Now().Add(-tc.age)
+			state.mu.Unlock()
+			s.branchStatusAt = time.Now().Add(-6 * time.Second)
+			healthy.Store(tc.healthy)
+			start := time.Now()
+			got := probe()
+			expected := "unavailable"
+			if tc.healthy {
+				expected = "live"
+			}
+			if got.Freshness != expected {
+				t.Fatalf("aged health cache: got %s, want %s", got.Freshness, expected)
+			}
+			if time.Since(start) > 450*time.Millisecond {
+				t.Fatal("readiness revalidation exceeded the short dashboard budget")
+			}
+		})
+	}
+}

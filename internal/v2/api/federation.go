@@ -115,7 +115,10 @@ func (s *Server) federationRead(ctx context.Context, target *config.FederationTa
 		}()
 	}
 	s.federationMu.Unlock()
-	if haveCache {
+	// An aged readiness snapshot is not evidence of a current outage. Recheck
+	// it within the existing short request deadline before reporting a branch
+	// unavailable. Data reads keep their nonblocking stale-cache behavior.
+	if haveCache && path != "/api/v1/health/ready" {
 		return response, nil
 	}
 	if knownFailed {
