@@ -428,6 +428,33 @@ func TestPostgreSQLLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		// Another replica owns the retention transaction. The contender must
+		// skip without waiting or deleting any of the eligible rows.
+		cleanupOwner, ownerErr := db.BeginTx(ctx, nil)
+		if ownerErr != nil {
+			t.Fatal(ownerErr)
+		}
+		defer func() { _ = cleanupOwner.Rollback() }()
+		if _, ownerErr = cleanupOwner.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, retentionCleanupLockID); ownerErr != nil {
+			t.Fatal(ownerErr)
+		}
+		skipCtx, skipCancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+		skipErr := s.Cleanup(skipCtx, 7*24*time.Hour, 7*24*time.Hour, time.Hour, 2*time.Minute)
+		skipCancel()
+		if skipErr != nil {
+			t.Fatalf("contending retention must skip nonblocking: %v", skipErr)
+		}
+		var retained bool
+		if ownerErr = db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM resource WHERE id=$1)`, oldEventID).Scan(&retained); ownerErr != nil {
+			t.Fatal(ownerErr)
+		}
+		if !retained {
+			t.Fatal("contending retention deleted data while another replica held the cleanup lock")
+		}
+		if ownerErr = cleanupOwner.Rollback(); ownerErr != nil {
+			t.Fatal(ownerErr)
+		}
+
 		lockTx, lockErr := db.BeginTx(ctx, nil)
 		if lockErr != nil {
 			t.Fatal(lockErr)

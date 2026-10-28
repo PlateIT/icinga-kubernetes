@@ -841,12 +841,23 @@ func (s Store) Status(ctx context.Context) (map[string]any, error) {
 	}, nil
 }
 
+// Scoped to this database; PostgreSQL releases the transaction lock on commit,
+// rollback or connection loss, allowing any HA replica to take the next run.
+const retentionCleanupLockID int64 = 0x494b53524554454e
+
 func (s Store) Cleanup(ctx context.Context, eventRetention, tombstoneRetention, historyRetention, federationCacheRetention time.Duration) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin retention cleanup: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	var acquired bool
+	if err = tx.QueryRowContext(ctx, `SELECT pg_try_advisory_xact_lock($1)`, retentionCleanupLockID).Scan(&acquired); err != nil {
+		return fmt.Errorf("acquire retention cleanup lock: %w", err)
+	}
+	if !acquired {
+		return nil
+	}
 	deletes := []struct {
 		name      string
 		statement string
